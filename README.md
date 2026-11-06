@@ -15,11 +15,17 @@ O **Honbakoo** é uma engine de backend modular, headless e de altíssima perfor
   * Simulação de ingestão de usuários e benchmarks com `k6`.
   * Estrutura de pastas do projeto.
 * 🗄️ **[Modelagem e Schema do Banco de Dados (DATABASE_SCHEMA.md)](./DATABASE_SCHEMA.md)**:
-  * Diagrama de Entidade-Relacionamento (ERD).
+  * Diagrama de Entidade-Relacionamento (ERD completo).
   * Migração Goose DDL completa com PostgreSQL 16+.
   * Índices GIN para busca booleana de tags (`+tag1 -tag2`).
   * Árvores de comentários hierárquicos com `ltree`.
   * Deduplicação de storage (CAS) com SHA-256 e Blacklist DMCA.
+* 🔌 **[Especificação da API RESTful Headless (API_SPECIFICATION.md)](./API_SPECIFICATION.md)**:
+  * Contrato de rotas REST v1 e WebSockets.
+  * Paginação baseada em cursor para alta escala.
+  * Endpoints para Leitor de Mangá/Webtoon e Player de Vídeo/Anime.
+  * Uploads otimizados com presigned URLs e deduplicação de hash em tempo real.
+  * Políticas de cache de borda (CDN) e rate limiting.
 
 ---
 
