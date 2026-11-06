@@ -32,7 +32,8 @@ Banda é o maior custo de uma plataforma de leitura. O projeto precisa servir mi
 1. A imagem é pública e imutável; o hash SHA-256 funciona como capability.
 2. A autorização fica no **manifesto** (`GET /chapters/:id/pages`), que é `private, no-store`.
 3. Quando houver VIP/early access, o manifesto devolve URLs assinadas de curta duração; a imagem continua cacheável.
-4. DMCA usa `blocked_media_hashes` para impedir reingestão; a remoção é soft-delete.
+4. **Resiliência Multi-Storage e Mirrors (Anti-ToS/Deplatforming):** A URL base da mídia não fica engessada em um único provedor de S3. O manifesto pode entregar URLs primárias e mirrors alternativos (ex: R2 primário + Backblaze B2 secundário ou VPS MinIO). Se um provedor bloquear o bucket ou suspender a conta, o frontend comuta o mirror automaticamente sem quebrar as leituras.
+5. DMCA usa `blocked_media_hashes` para impedir reingestão; a remoção é soft-delete.
 
 ## Consequências
 

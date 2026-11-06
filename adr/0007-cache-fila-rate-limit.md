@@ -34,7 +34,8 @@ Cache, fila e rate limit são necessários em qualquer escala, mas Redis + Asynq
 2. `budget`: `ristretto`, worker pool in-process, token bucket em memória.
 3. `scale`: Redis/KeyDB, Asynq, rate limit compartilhado.
 4. `singleflight` é por processo; no `scale` é complementado por cache Redis de 5–30s com jitter.
-5. Flush de views usa `GETDEL` + `UPSERT` em `manga_view_daily` e lock de job.
+5. **Circuit Breaker no Cache/Redis (Anti-Cascading Failure):** No perfil `scale`, chamadas ao Redis têm timeout rígido de 50ms. Se o Redis falhar ou estiver inacessível, o Circuit Breaker abre, a aplicação faz fallback transparente para busca direta no PostgreSQL (degradada porém viva) e o rate-limiting comuta temporariamente para memória local, impedindo que a queda do Redis derrube o site.
+6. Flush de views usa `GETDEL` + `UPSERT` em `manga_view_daily` e lock de job.
 
 ## Consequências
 

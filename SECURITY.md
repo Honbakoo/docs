@@ -84,13 +84,15 @@
 
 ---
 
-## 6. Borda e HTTP
+## 6. Borda, HTTP e Timeouts Defensivos
 
 - TLS obrigatório; HSTS com `max-age` longo após validação.
 - `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Cross-Origin-Resource-Policy: same-site`.
 - CORS por allowlist explícita; sem `*` em rotas autenticadas.
 - CSP restritiva no frontend; `frame-ancestors` para evitar clickjacking.
-- Limite de tamanho de request e timeout de leitura no proxy.
+- **Timeouts Rígidos de Conexão (Anti-Connection Leak):**
+  - Timeout de leitura e escrita no servidor HTTP (`ReadTimeout: 10s`, `WriteTimeout: 15s`, `IdleTimeout: 60s`).
+  - Timeout de contexto em todas as queries com o banco de dados (`context.WithTimeout(ctx, 5*time.Second)`). Conexões lentas ou clientes engasgados são cancelados para liberar slots do pool de conexões.
 - `CF-Connecting-IP` só é aceito de proxy confiável; caso contrário, `RemoteAddr`.
 - Métricas e debug nunca expostos na borda pública.
 

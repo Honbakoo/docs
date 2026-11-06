@@ -761,8 +761,9 @@ CREATE TABLE mangas (
 );
 
 -- ÍNDICES DE PERFORMANCE EXTREMA
-CREATE INDEX idx_mangas_tag_ids ON mangas USING GIN (tag_ids);
-CREATE INDEX idx_mangas_orig_title_trgm ON mangas USING GIN (original_title gin_trgm_ops);
+-- FASTUPDATE = ON acumula inserções de tags na pending list em RAM para evitar write amplification e travas de disco durante uploads concorrentes
+CREATE INDEX idx_mangas_tag_ids ON mangas USING GIN (tag_ids) WITH (fastupdate = on);
+CREATE INDEX idx_mangas_orig_title_trgm ON mangas USING GIN (original_title gin_trgm_ops) WITH (fastupdate = on);
 CREATE INDEX idx_mangas_format ON mangas(format) WHERE is_published = TRUE AND is_dmca_blocked = FALSE;
 -- Índices keyset: a segunda coluna (id) garante ordenação estável e cursor sem OFFSET.
 CREATE INDEX idx_mangas_views_all_time ON mangas(views_all_time DESC, id DESC) WHERE is_published = TRUE AND is_dmca_blocked = FALSE;

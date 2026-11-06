@@ -148,9 +148,14 @@ Fazer múltiplos `JOINs` relacionais clássicos degrada a performance do banco s
   * O tamanho do payload de upload do usuário é reduzido em até 80%.
   * O servidor economiza ciclos pesados de CPU, não precisando reprocessar centenas de imagens simultaneamente.
 
-### 5.2 Validação e Limites Rígidos no Backend
-* Limite estrito de tamanho por página (ex: máximo de 5MB por imagem) e validação de *Magic Bytes* no cabeçalho do arquivo para evitar uploads maliciosos disfarçados de imagem.
-* Fallback no backend via **`libvips`** apenas se a imagem não estiver no formato WebP otimizado.
+### 5.2 Validação e Limites Rígidos no Backend (Defesa contra Bombas de Descompressão)
+* **Validação dos Primeiros 32 Bytes (Magic Bytes e Dimensões):** Antes de enviar o stream para o `libvips`, a aplicação inspeciona o cabeçalho.
+  * Se `byte_size > 5MB` (configurável via `MEDIA_MAX_BYTES`), o upload é abortado imediatamente (`413 Payload Too Large`).
+  * Se `width * height > 50_000_000` (50 Megapixels, configurável via `MEDIA_MAX_PIXELS`), o arquivo é sumariamente rejeitado para evitar **Pixel Flood Attack / Zip Bomb** que causaria estouro de RAM (OOM) no servidor.
+* **Semáforo Estrito de Processamento de Imagens (Concurrency Limiter):**
+  * No perfil `budget`, o worker de conversão `libvips` é limitado a concorrência **1** (1 imagem por vez), com `nice -n 19` (prioridade mínima de CPU). Isso impede que uploads paralelos travem a CPU em 100% e derrubem a API de leitura.
+* **Quarentena de Uploads Órfãos (Garbage Collection):**
+  * Slots de upload abertos cujas mídias não forem vinculadas a nenhum capítulo publicado em até **2 horas** são automaticamente purgados do storage para evitar esgotamento de disco por flood de lixo.
 
 ### 5.3 Arquitetura de Scrapers Híbrida
 * **Scrapers Leves no Servidor (WASM / JS Sandboxed via Goja):**
