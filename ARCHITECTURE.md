@@ -10,10 +10,11 @@ A arquitetura do Honbakoo foi desenhada para resolver os maiores problemas reais
 
 ### Princípios Fundamentais:
 1. **Zero-Friction Setup ("Clone & Play"):** Um único comando (`docker compose up -d`) inicializa todo o ecossistema pronto para uso local ou em produção.
-2. **Zero Vendor Lock-in & Dual-Profile:** Suporte nativo ao modo `budget` (100% autocontido, sem dependências externas pagas) e ao modo `scale` (S3 externo, CDNs distribuídas e proxies).
-3. **Sem ORM Pesado (Zero Runtime Reflection):** Utilização estrita de SQL nativo compilado com **`sqlc` + `pgx`**. Queries validadas em tempo de compilação sem custos ocultos de CPU/RAM.
-4. **Desacoplamento de Metadados vs. Mídia:** A API de dados nunca bloqueia o runtime para ler e servir arquivos pesados de imagem ou vídeo.
-5. **Prevenção Ativa de Gargalos Clássicos:** Proteção contra *Hot-linking*, *Cache Stampede / Thundering Herd* via `singleflight`, e *Database Locking* por contagem de views via buffer atômico no Redis.
+2. **Single-Binary com Migrations Automáticas (Goose + `embed.FS`):** As migrações do banco de dados são embutidas dentro do próprio binário executável em Go. Ao subir o servidor, o banco é migrado e validado automaticamente sem exigir instalação de ferramentas de linha de comando externas.
+3. **Zero Vendor Lock-in & Dual-Profile:** Suporte nativo ao modo `budget` (100% autocontido, sem dependências externas pagas) e ao modo `scale` (S3 externo, CDNs distribuídas e proxies).
+4. **Sem ORM Pesado (Zero Runtime Reflection):** Utilização estrita de SQL nativo compilado com **`sqlc` + `pgx`**. Queries validadas em tempo de compilação sem custos ocultos de CPU/RAM.
+5. **Desacoplamento de Metadados vs. Mídia:** A API de dados nunca bloqueia o runtime para ler e servir arquivos pesados de imagem ou vídeo.
+6. **Prevenção Ativa de Gargalos Clássicos:** Proteção contra *Hot-linking*, *Cache Stampede / Thundering Herd* via `singleflight`, e *Database Locking* por contagem de views via buffer atômico no Redis.
 
 ---
 
@@ -33,10 +34,12 @@ A arquitetura do Honbakoo foi desenhada para resolver os maiores problemas reais
 | **Linguagem** | **Go (Golang)** | Rust, Node.js, Python | Baixo consumo de RAM, compilação estática rápida, manutenção simples pela comunidade. |
 | **Padrão de API** | **RESTful Pragmatic + WS** | GraphQL, gRPC | Altamente amigável para cache HTTP em CDNs de borda, simples de debugar e integrar. |
 | **Identificadores** | **UUIDv7** | UUIDv4, Auto-increment | Ordenação cronológica, não fragmenta índices B-Tree no PostgreSQL e não vaza números sequenciais. |
+| **Ferramenta de Migrations** | **Goose (`pressly/goose`)** | `golang-migrate`, Atlas | Suporte a `embed.FS` (migrations embutidas no binário único Go) e suporte híbrido (SQL puro + lógica Go se necessária). |
 | **Camada de Banco** | **`sqlc` + `pgx`** | GORM, Ent, Prisma | **Sem ORM**. SQL nativo compilado para structs Go estáticas. Performance máxima e queries transparentes. |
-| **Banco Relacional**| **PostgreSQL 16+** | MySQL, SQLite, MongoDB | Suporte avançado a índices GIN (para tags) e trigramas (`pg_trgm`) para busca textual rápida. |
+| **Banco Relacional**| **PostgreSQL 16+** | MySQL, SQLite, MongoDB | Suporte avançado a índices GIN (para tags booleanas ultra-rápidas) e trigramas (`pg_trgm`) para busca textual de títulos. |
 | **Cache & Buffers** | **Redis / KeyDB** | Memcached | Suporte a estruturas de dados atômicas (`INCR`, `HSET`, Streams) e expiração configurável. |
 | **Processamento Img**| **Client-Side + libvips** | ImageMagick, PIL | Otimização pré-upload no navegador do usuário poupa banda e CPU; libvips no servidor como fallback/validação. |
+| **Abstração Storage** | **Local FS / Cloudflare R2** | Wasabi, AWS S3, Cloudinary | Abstração universal compatível com S3. Modo `budget` usa disco local; modo nuvem usa Cloudflare R2 com **tráfego de saída 100% gratuito (Zero Egress)**. |
 | **Reverse Proxy / SSL**| **Caddy** ou **NGINX** | Traefik, Apache | 100% gratuitos e open source. Caddy gera certificados HTTPS automáticos via Let's Encrypt com zero esforço. |
 | **Edge / Proteção** | **Cloudflare (Free) / Tunnels** | DDoS-Guard | Opcional e sem custo. O `cloudflared` esconde o IP da VPS sem precisar abrir portas ou expor dados pessoais. |
 | **Testes de Carga** | **k6 (Grafana)** | Apache Bench, Locust | Scripts declarativos em JS para simular picos de tráfego, leitores e comentários simultâneos. |
@@ -61,6 +64,8 @@ flowchart TD
             ContentMod[Catálogo: Obras, Capítulos, Tags GIN]
             ModMod[Moderação & DMCA: Soft-delete + Hash Blacklist]
         end
+
+        GooseEmbed[Goose Auto-Migrations: embed.FS] -.->|Executa no Startup| PG
     end
 
     subgraph "Camada de Dados & Persistência"
@@ -70,17 +75,17 @@ flowchart TD
         FlushWorker -.->|Lê contadores atômicos| Cache
     end
 
-    subgraph "Mídia & Storage (Dual-Mode: Local ou S3)"
+    subgraph "Mídia & Storage (Abstração Universal S3)"
         Edge -->|Leitura Direta de Imagens em Cache| MediaServer[Static Media Server: NGINX / Caddy sendfile]
-        MediaServer --> Storage[(Storage: Disco Local ou Cloudflare R2 / Wasabi / B2)]
+        MediaServer --> Storage[(Storage: Disco Local ou Cloudflare R2 / Backblaze B2)]
         
         JobQueue[Asynq / Redis Queue] --> ImgWorker[Image Worker: libvips]
         ImgWorker -->|Converte para WebP + Deduplica por Hash| Storage
     end
 
     subgraph "Ingestão e Scrapers Isolados"
-        WasmWorker[Wasm Scraper Worker] -->|Egress via Proxy| ExternalSources[(Sites Externos)]
-        PyCLI[Python External Ingest CLI] -->|API Ingestão Segura| Router
+        WasmWorker[Wasm / Goja Scraper Worker] -->|Egress via Proxy| ExternalSources[(Sites Externos)]
+        PyCLI[Python External Ingest CLI] -->|API Ingestão Segura: API Key| Router
         WasmWorker -->|Publica Novos Capítulos| JobQueue
     end
 ```
@@ -123,11 +128,11 @@ Fazer múltiplos `JOINs` relacionais clássicos degrada a performance do banco s
 * Fallback no backend via **`libvips`** apenas se a imagem não estiver no formato WebP otimizado.
 
 ### 5.3 Arquitetura de Scrapers Híbrida
-* **Scrapers Leves no Servidor (WASM / JS Sandboxed):**
+* **Scrapers Leves no Servidor (WASM / JS Sandboxed via Goja):**
   * Para rodar dentro do próprio host com consumo ínfimo de memória, os conectores de sites externos podem ser implementados em WebAssembly ou scripts leves interpretados em sandbox no Go (via `goja`).
 * **Scrapers Externos em Python (Ingestão Local do Administrador):**
   * Scrapers complexos (que utilizam Selenium, navegadores headless ou proxies rotativos) podem rodar na máquina pessoal do desenvolvedor/administrador.
-  * O script em Python extrai os dados e faz a ingestão no servidor via rota autenticada da API (`POST /api/v1/ingest/chapter`).
+  * O script em Python extrai os dados e faz a ingestão no servidor via rota autenticada da API (`POST /api/v1/ingest/chapter`) usando uma API Key de ingestão segura (`X-API-Key`).
 
 ---
 
@@ -155,11 +160,11 @@ O sistema se autoconfigura a partir da variável `HONBAKOO_PROFILE`:
   * Serve arquivos estáticos via Caddy/NGINX com a syscall `sendfile` do Linux (leitura de disco direto para a placa de rede sem tocar na CPU do Go).
   * PostgreSQL tunado para operar consumindo no máximo 150MB de RAM (`shared_buffers = 128MB`).
 * **`PROFILE=scale`:**
-  * Habilita driver S3 (Wasabi, Backblaze B2, AWS ou Cloudflare R2).
+  * Habilita driver S3 apontando para **Cloudflare R2** (com taxa zero de saída/egress) ou **Backblaze B2**.
   * Habilita distribuição de workers em nós separados.
 
 ### 7.2 Eliminação de Custos de Banda (Zero Egress com Cloudflare R2 e Cache)
-* **Cloudflare R2:** Oferece 10GB de storage grátis e **taxa zero de egress (tráfego de saída ilimitado gratuito)**. Ideal para quem quer storage em nuvem sem pagar por gigabyte baixado.
+* **Cloudflare R2:** Oferece 10GB de storage grátis e **taxa zero de egress (tráfego de saída ilimitado gratuito)**. Elimina o maior gargalo financeiro de plataformas de leitura.
 * **Cache Imutável no Navegador do Leitor:**
   * Todo capítulo servido acompanha os headers:
     ```http
@@ -223,11 +228,11 @@ honbakoo/
 │   ├── billing/           # Sistema VIP, assinaturas e webhooks
 │   ├── community/         # Comentários (LTree), reações e moderação
 │   ├── content/           # Catálogo: obras, capítulos e tags (GIN)
-│   ├── storage/           # Abstração de armazenamento (Local FS / S3 API)
+│   ├── storage/           # Abstração de armazenamento (Local FS / S3 API: Cloudflare R2 / B2)
 │   ├── moderation/        # Soft-delete DMCA e blacklist de hashes
 │   ├── singleflight/      # Gerenciamento de deduplicação de requisições concorrentes
 │   └── database/          # Queries SQL nativas e código gerado pelo sqlc
-├── migrations/            # Migrações versionadas em SQL puro
+├── migrations/            # Migrações versionadas em SQL puro gerenciadas pelo Goose (embed.FS)
 ├── deploy/
 │   ├── caddy/             # Caddyfile com HTTPS automático e headers de cache
 │   └── postgres/          # postgresql.conf tunado para perfil budget (512MB-1GB)
