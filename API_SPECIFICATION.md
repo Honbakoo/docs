@@ -1,18 +1,19 @@
 # 🔌 Honbakoo RESTful API Specification (Headless Contract)
 
 > **Versão da API:** `v1`  
-> **Protocolo:** HTTP/2 ou HTTP/3 sobre TLS + WebSockets (RFC 6455)  
+> **Protocolo:** HTTP/2 ou HTTP/3 sobre TLS (Stateless puro, zero WebSockets para máxima eficiência e compatibilidade com CDNs)  
 > **Formato de Dados:** JSON (RFC 8259)  
 > **Autenticação:** Bearer JWT (Access Token) + HttpOnly Cookie / Header (Refresh Token)  
-> **Convenção de Paginação:** Cursor-based pagination (`cursor` baseado em UUIDv7 / CreatedAt) para performance extrema e compatibilidade total com cache de CDN.
+> **Convenção de Paginação:** Cursor-based pagination (`cursor` baseado em UUIDv7 / CreatedAt) para consultas em tempo constante $O(1)$.
 
 ---
 
 ## 1. Princípios de Design da API
 
-1. **Edge-Cache Friendly:** Rotas de catálogo e leitura (`GET /api/v1/mangas/*` e `GET /api/v1/chapters/*`) geram cabeçalhos de cache otimizados (`ETag`, `Cache-Control: public, max-age=...`) para que CDNs (Cloudflare / Caddy) absorvam mais de 90% do tráfego.
-2. **Cursor Pagination:** Elimina o lento `OFFSET` em tabelas com milhares de registros. O cliente envia `limit=20&cursor=018d45...` garantindo consultas em tempo constante $O(1)$.
-3. **Respostas Padronizadas:** Todas as respostas seguem uma estrutura previsível:
+1. **Edge-Cache Friendly (Stateless):** Rotas públicas de catálogo, capítulos e comentários geram cabeçalhos de cache otimizados (`ETag`, `Cache-Control: public, max-age=...`) para que CDNs (Cloudflare / Caddy) absorvam mais de 90% do tráfego sem tocar na CPU do servidor.
+2. **Cursor Pagination:** Elimina o lento `OFFSET` em tabelas com milhares de registros. O cliente envia `limit=20&cursor=018d45...` garantindo performance contínua.
+3. **Mutações Otimistas no Frontend:** O envio de comentários e reações atualiza a interface do usuário instantaneamente enquanto o `POST` é processado em segundo plano, entregando a sensação de tempo real sem os custos e instabilidades de WebSockets contínuos.
+4. **Respostas Padronizadas:**
 
 ```json
 {
@@ -20,20 +21,7 @@
   "data": { ... },
   "meta": {
     "next_cursor": "018d45f3-...",
-    "has_more": true,
-    "total": 1250
-  }
-}
-```
-
-Em caso de erro:
-```json
-{
-  "success": false,
-  "error": {
-    "code": "RESOURCE_NOT_FOUND",
-    "message": "O mangá solicitado não existe ou foi removido.",
-    "details": null
+    "has_more": true
   }
 }
 ```
@@ -44,19 +32,19 @@ Em caso de erro:
 
 ```mermaid
 flowchart LR
-    subgraph "API Pública (Leitores / Apps)"
+    subgraph "Catálogo & Conteúdo (Edge Cached)"
         A1[GET /api/v1/mangas] --> A2[GET /api/v1/mangas/:slug]
         A2 --> A3[GET /api/v1/chapters/:id]
         A3 --> A4[GET /api/v1/chapters/:id/pages]
         A3 --> A5[GET /api/v1/chapters/:id/sources]
         A1 --> A6[GET /api/v1/tags]
+        A1 --> A7[GET /api/v1/creators/:slug]
     end
 
-    subgraph "Comunidade & Interações"
+    subgraph "Comunidade (REST Puro)"
         C1[GET /api/v1/chapters/:id/comments]
         C2[POST /api/v1/chapters/:id/comments]
         C3[POST /api/v1/comments/:id/react]
-        C4[WS /api/v1/ws/comments]
     end
 
     subgraph "Auth & Usuário"
@@ -85,8 +73,10 @@ Listagem de catálogo com filtros universais e busca booleana por tags.
 
 * **Query Parameters:**
   * `format` (opcional): `manga`, `manhwa`, `manhua`, `doujinshi`, `anime_h`, `anime_m`
-  * `tags_include` (opcional): Array de slugs ou IDs (`12,45` ou `romance,mind-break`)
+  * `lang` (opcional): Código de idioma preferido para título/sinopse (default: `pt-br`)
+  * `tags_include` (opcional): Array de slugs ou IDs (`12,45` ou `romance,action`)
   * `tags_exclude` (opcional): Array de slugs ou IDs a proibir (`netorare,gore`)
+  * `creator` (opcional): Slug de artista ou roteirista
   * `search` (opcional): Texto para busca com trigramas no título
   * `sort` (opcional): `trending`, `popular`, `latest`, `rating` (default: `trending`)
   * `limit` (opcional): Padrão `24`, máx `100`
@@ -99,7 +89,9 @@ Listagem de catálogo com filtros universais e busca booleana por tags.
   "data": [
     {
       "id": "018d45f3-a12b-7c3d-9e4f-5a6b7c8d9e0f",
-      "title": "Aventuras no Outro Mundo",
+      "display_title": "Aventuras no Outro Mundo",
+      "original_title": "Otherworldly Adventures",
+      "original_language": "ko",
       "slug": "aventuras-no-outro-mundo",
       "format": "manhwa",
       "reading_direction": "vertical_scroll",
@@ -113,12 +105,10 @@ Listagem de catálogo com filtros universais e busca booleana por tags.
         {"id": 1, "name": "Ação", "slug": "acao", "category": "general"},
         {"id": 14, "name": "Fantasia", "slug": "fantasia", "category": "general"}
       ],
-      "latest_chapter": {
-        "id": "018d4610-b23c-7d4e-af5a-6b7c8d9e0f1a",
-        "chapter_number": 42.0,
-        "language": "pt-br",
-        "created_at": "2026-11-06T12:00:00Z"
-      }
+      "creators": [
+        {"name": "Park Jin-Woo", "slug": "park-jin-woo", "role": "story"},
+        {"name": "Studio Red", "slug": "studio-red", "role": "art"}
+      ]
     }
   ],
   "meta": {
@@ -128,23 +118,14 @@ Listagem de catálogo com filtros universais e busca booleana por tags.
 }
 ```
 
-#### `GET /api/v1/mangas/:slug`
-Retorna todos os detalhes de uma obra, incluindo a lista agrupada de capítulos e grupos de tradução.
-
 ---
 
 ### 3.2 Módulo de Leitor & Player (`/api/v1/chapters`)
 
-#### `GET /api/v1/chapters/:id`
-Metadados do capítulo/episódio, incluindo verificação de acesso VIP/antecipado.
+#### `GET /api/v1/chapters/:id/pages` (Mangá / Manhwa / Doujinshi)
+Retorna as páginas ordenadas para renderização.
 
-* **Headers de Resposta:**
-  * `Cache-Control: public, max-age=3600` (se já liberado para todos)
-  * `ETag: W/"chap-018d4610-..."`
-
-#### `GET /api/v1/chapters/:id/pages` (Para Mangá / Manhwa / Doujinshi)
-Retorna as páginas ordenadas para renderização no leitor.
-
+* **Headers de Resposta:** `Cache-Control: public, max-age=86400, immutable`
 * **Resposta de Sucesso (`200 OK`):**
 ```json
 {
@@ -156,25 +137,18 @@ Retorna as páginas ordenadas para renderização no leitor.
     "pages": [
       {
         "page_number": 1,
-        "url": "https://cdn.honbakoo.org/media/a1/b2/c3/a1b2c3d4e5f6...webp?token=hmac_signature&exp=1794000000",
+        "url": "https://cdn.honbakoo.org/media/a1/b2/c3/a1b2c3d4e5f6...webp?token=hmac&exp=1794000000",
         "width": 1200,
         "height": 1800,
         "byte_size": 245100
-      },
-      {
-        "page_number": 2,
-        "url": "https://cdn.honbakoo.org/media/f4/e5/d6/f4e5d6a7b8c9...webp?token=hmac_signature&exp=1794000000",
-        "width": 1200,
-        "height": 1800,
-        "byte_size": 289400
       }
     ]
   }
 }
 ```
 
-#### `GET /api/v1/chapters/:id/sources` (Para Anime / Anime-H / Vídeo)
-Retorna os servidores de streaming e faixas de legenda para o player de vídeo.
+#### `GET /api/v1/chapters/:id/sources` (Anime / Anime-H / Vídeo)
+Retorna os servidores de streaming e legendas.
 
 * **Resposta de Sucesso (`200 OK`):**
 ```json
@@ -184,7 +158,7 @@ Retorna os servidores de streaming e faixas de legenda para o player de vídeo.
     "chapter_id": "018d4610-b23c-7d4e-af5a-6b7c8d9e0f1a",
     "sources": [
       {
-        "server_name": "Main HLS Local",
+        "server_name": "Main Server",
         "source_type": "direct_hls",
         "resolution": "1080p",
         "stream_url": "https://stream.honbakoo.org/hls/ep01/master.m3u8"
@@ -198,7 +172,7 @@ Retorna os servidores de streaming e faixas de legenda para o player de vídeo.
     ],
     "subtitles": [
       {
-        "language": "pt-br",
+        "language_code": "pt-br",
         "label": "Português",
         "subtitle_url": "https://cdn.honbakoo.org/subs/ep01_pt.vtt",
         "is_default": true
@@ -210,11 +184,12 @@ Retorna os servidores de streaming e faixas de legenda para o player de vídeo.
 
 ---
 
-### 3.3 Módulo de Comunidade & Comentários (`/api/v1/comments`)
+### 3.3 Módulo de Comunidade & Comentários (`/api/v1/comments` - REST Puro)
 
 #### `GET /api/v1/chapters/:id/comments`
-Retorna a árvore hierárquica de comentários montada via `ltree`.
+Retorna a árvore hierárquica de comentários (construída via `ltree`).
 
+* **Headers de Resposta:** `Cache-Control: public, max-age=30, stale-while-revalidate=60`
 * **Resposta de Sucesso (`200 OK`):**
 ```json
 {
@@ -228,7 +203,7 @@ Retorna a árvore hierárquica de comentários montada via `ltree`.
         "avatar_url": "https://cdn.honbakoo.org/avatars/user1.webp",
         "role": "vip"
       },
-      "content": "Esse capítulo foi sensacional! O plot twist no final me pegou.",
+      "content": "Esse capítulo foi sensacional!",
       "likes_count": 42,
       "dislikes_count": 1,
       "created_at": "2026-11-06T13:10:00Z",
@@ -241,7 +216,7 @@ Retorna a árvore hierárquica de comentários montada via `ltree`.
             "avatar_url": "https://cdn.honbakoo.org/avatars/user2.webp",
             "role": "user"
           },
-          "content": "Concordo totalmente! Ansioso pelo próximo.",
+          "content": "Concordo totalmente!",
           "likes_count": 8,
           "dislikes_count": 0,
           "created_at": "2026-11-06T13:15:00Z",
@@ -254,20 +229,21 @@ Retorna a árvore hierárquica de comentários montada via `ltree`.
 ```
 
 #### `POST /api/v1/chapters/:id/comments`
-* **Autenticação Obrigatória:** Bearer JWT
+* **Autenticação:** Bearer JWT
 * **Body:**
-  * `parent_id` (opcional): UUIDv7 do comentário pai se for uma resposta
+  * `parent_id` (opcional): UUIDv7 do comentário pai se for resposta
   * `content`: Texto do comentário (máx 2.000 caracteres)
 
-#### `WS /api/v1/ws/comments?chapter_id=...`
-WebSocket leve em Go para recebimento de novos comentários em tempo real enquanto o usuário lê o capítulo.
+#### `POST /api/v1/comments/:id/react`
+* **Autenticação:** Bearer JWT
+* **Body:** `{"is_like": true}`
 
 ---
 
 ### 3.4 Módulo de Ingestão & Upload (`/api/v1/ingest` & `/api/v1/uploads`)
 
 #### `POST /api/v1/uploads/presigned-url`
-Gera URLs pré-assinadas com expiração para que o frontend/CLI envie as páginas diretamente para o storage (S3 ou Disco Local via backend), sem travar a conexão HTTP da API.
+Gera URLs pré-assinadas com expiração temporária e verificação de deduplicação prévia por hash SHA-256.
 
 * **Autenticação:** Bearer Token de Scanlator/Admin ou `X-API-Key`
 * **Request:**
@@ -299,26 +275,12 @@ Gera URLs pré-assinadas com expiração para que o frontend/CLI envie as págin
   }
 }
 ```
-*(Se `already_exists` for `true`, o arquivo já existe no banco por deduplicação de hash; o cliente nem precisa fazer o upload!)*
-
-#### `POST /api/v1/ingest/chapter`
-Comunica o término do upload e registra o novo capítulo no catálogo.
 
 ---
 
-## 4. Rate Limiting e Códigos de Status HTTP
+## 4. Políticas de Rate Limiting e Cache
 
-* **`200 OK`**: Sucesso comum.
-* **`201 Created`**: Recurso criado (novo comentário, upload concluído).
-* **`304 Not Modified`**: Conteúdo em cache do cliente ainda válido (baseado no `ETag`).
-* **`400 Bad Request`**: Parâmetros inválidos.
-* **`401 Unauthorized`**: Token ausente ou expirado.
-* **`403 Forbidden`**: Conteúdo restrito para VIPs ou usuário banido.
-* **`404 Not Found`**: Obra ou capítulo inexistente ou removido por DMCA.
-* **`429 Too Many Requests`**: Rate limit excedido (retorna header `Retry-After: 60`).
-* **`500 Internal Server Error`**: Erro inesperado do servidor.
-
-### Políticas de Rate Limit (Controladas via Redis):
-* **Rotas Públicas de Leitura (`GET`):** 120 requisições / minuto por IP.
-* **Rotas de Criação de Comentários (`POST`):** 5 comentários / minuto por usuário.
-* **Rotas de Autenticação (`/auth/login`):** 5 tentativas / minuto por IP com bloqueio exponencial contra força bruta.
+* **Rotas Públicas de Leitura (`GET /mangas`, `/chapters`):** 120 req/min por IP.
+* **Rotas de Criação de Comentários (`POST /comments`):** 5 comentários/min por usuário.
+* **Rotas de Autenticação (`/auth/login`):** 5 tentativas/min por IP com bloqueio exponencial contra força bruta.
+* **Cache de Borda:** Respostas `GET` utilizam `ETag` + `Cache-Control`. Se os dados não mudaram, o servidor retorna `304 Not Modified`, poupando 100% do tráfego do banco de dados.

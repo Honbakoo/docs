@@ -10,11 +10,12 @@ A arquitetura do Honbakoo foi desenhada para resolver os maiores problemas reais
 
 ### Princípios Fundamentais:
 1. **Zero-Friction Setup ("Clone & Play"):** Um único comando (`docker compose up -d`) inicializa todo o ecossistema pronto para uso local ou em produção.
-2. **Single-Binary com Migrations Automáticas (Goose + `embed.FS`):** As migrações do banco de dados são embutidas dentro do próprio binário executável em Go. Ao subir o servidor, o banco é migrado e validado automaticamente sem exigir instalação de ferramentas de linha de comando externas.
-3. **Zero Vendor Lock-in & Dual-Profile:** Suporte nativo ao modo `budget` (100% autocontido, sem dependências externas pagas) e ao modo `scale` (S3 externo, CDNs distribuídas e proxies).
-4. **Sem ORM Pesado (Zero Runtime Reflection):** Utilização estrita de SQL nativo compilado com **`sqlc` + `pgx`**. Queries validadas em tempo de compilação sem custos ocultos de CPU/RAM.
-5. **Desacoplamento de Metadados vs. Mídia:** A API de dados nunca bloqueia o runtime para ler e servir arquivos pesados de imagem ou vídeo.
-6. **Prevenção Ativa de Gargalos Clássicos:** Proteção contra *Hot-linking*, *Cache Stampede / Thundering Herd* via `singleflight`, e *Database Locking* por contagem de views via buffer atômico no Redis.
+2. **Single-Binary com Migrations Automáticas (Goose + `embed.FS`):** As migrações do banco de dados são embutidas dentro do próprio binário executável em Go. Ao subir o servidor, o banco é migrado e validado automaticamente sem exigir instalação de ferramentas externas.
+3. **Sem Conexões Persistentes Desnecessárias (Zero-WebSocket):** Eliminação de WebSockets para comentários. Todas as interações comunitárias usam **RESTful puro stateless com cache na borda (CDN)** e mutações otimistas no frontend, prevenindo esgotamento de descritores de arquivo (`ulimit`) e timeouts de CDN sob milhares de leitores simultâneos.
+4. **Zero Vendor Lock-in & Dual-Profile:** Suporte nativo ao modo `budget` (100% autocontido, sem dependências externas pagas) e ao modo `scale` (S3 externo, CDNs distribuídas e proxies).
+5. **Sem ORM Pesado (Zero Runtime Reflection):** Utilização estrita de SQL nativo compilado com **`sqlc` + `pgx`**. Queries validadas em tempo de compilação sem custos ocultos de CPU/RAM.
+6. **Desacoplamento de Metadados vs. Mídia:** A API de dados nunca bloqueia o runtime para ler e servir arquivos pesados de imagem ou vídeo.
+7. **Prevenção Ativa de Gargalos Clássicos:** Proteção contra *Hot-linking*, *Cache Stampede / Thundering Herd* via `singleflight`, e *Database Locking* por contagem de views via buffer atômico no Redis.
 
 ---
 
@@ -23,16 +24,16 @@ A arquitetura do Honbakoo foi desenhada para resolver os maiores problemas reais
 ### 2.1 Por que **Go (Golang 1.22+)** no Core?
 
 * **Eficiência sob Pouca RAM:** Uma API completa em Go consome entre **20MB e 45MB de RAM** em modo ocioso, permitindo rodar em servidores de \$3-\$4/mês sem risco de OOM (*Out Of Memory*).
-* **Concorrência Leve com Goroutines:** Cada conexão HTTP ou WebSocket custa apenas ~2KB de stack memory inicial, viabilizando milhares de leitores simultâneos.
+* **Concorrência Leve com Goroutines:** Requisições HTTP concorrentes tratadas em milissegundos com stack memory inicial de apenas ~2KB.
 * **Ferramental Nativo de Concorrência:** O pacote `golang.org/x/sync/singleflight` elimina requisições duplicadas simultâneas ao banco de dados em picos de lançamento.
-* **Ecossistema Maduro de Segurança:** Suporte comprovado e auditado para `Argon2id` (hash de senhas resistente a GPUs), JWT rotativo e middlewares de rate limiting.
+* **Ecossistema Maduro de Segurança:** Suporte comprovado e auditado para `Argon2id` (hash de senhas resistente a GPUs), JWT rotativo e middlewares de rate limiting em memória.
 
 ### 2.2 Tabela de Componentes
 
 | Domínio | Escolha Técnica | Alternativas Consideradas | Motivo da Decisão |
 | :--- | :--- | :--- | :--- |
 | **Linguagem** | **Go (Golang)** | Rust, Node.js, Python | Baixo consumo de RAM, compilação estática rápida, manutenção simples pela comunidade. |
-| **Padrão de API** | **RESTful Pragmatic + WS** | GraphQL, gRPC | Altamente amigável para cache HTTP em CDNs de borda, simples de debugar e integrar. |
+| **Padrão de API** | **RESTful Stateless Puro** | GraphQL, WebSockets, gRPC | 100% amigável para cache HTTP em CDNs de borda (Cloudflare Free), zero risco de esgotar conexões TCP persistentes. |
 | **Identificadores** | **UUIDv7** | UUIDv4, Auto-increment | Ordenação cronológica, não fragmenta índices B-Tree no PostgreSQL e não vaza números sequenciais. |
 | **Ferramenta de Migrations** | **Goose (`pressly/goose`)** | `golang-migrate`, Atlas | Suporte a `embed.FS` (migrations embutidas no binário único Go) e suporte híbrido (SQL puro + lógica Go se necessária). |
 | **Camada de Banco** | **`sqlc` + `pgx`** | GORM, Ent, Prisma | **Sem ORM**. SQL nativo compilado para structs Go estáticas. Performance máxima e queries transparentes. |
@@ -52,16 +53,17 @@ A arquitetura do Honbakoo foi desenhada para resolver os maiores problemas reais
 flowchart TD
     Client([Usuário / Web / Mobile App]) --> Edge[Reverse Proxy & Shield: Caddy / Cloudflare]
 
-    subgraph "Camada de Aplicação (Honbakoo Core em Go)"
-        Edge -->|HTTP REST / WebSockets| Router[HTTP Router: Chi]
+    subgraph "Camada de Aplicação (Honbakoo Core em Go - Stateless REST)"
+        Edge -->|HTTP REST: GET / POST / PUT| Router[HTTP Router: Chi]
         Router --> SingleFlight[Singleflight Guard: Anti-Thundering Herd]
         SingleFlight --> Modules
         
         subgraph Modules [Módulos Core]
             AuthMod[Auth & RBAC: Argon2id + JWT Rotativo]
             VipMod[VIP / Billing: Assinaturas, Acesso Antecipado]
-            CommMod[Comunidade: Comentários Hierárquicos LTree]
-            ContentMod[Catálogo: Obras, Capítulos, Tags GIN]
+            CommMod[Comunidade: Comentários Hierárquicos LTree em REST]
+            ContentMod[Catálogo: Obras, Capítulos, Tags GIN, I18n]
+            EditorialMod[Metadados: Criadores, Revistas, Editoras]
             ModMod[Moderação & DMCA: Soft-delete + Hash Blacklist]
         end
 
@@ -99,10 +101,10 @@ Em plataformas de entretenimento visual adulto e mangá, os usuários realizam b
 Fazer múltiplos `JOINs` relacionais clássicos degrada a performance do banco sob alta concorrência. O Honbakoo adota a modelagem de alta escala:
 
 ### 4.1 Modelagem com Índice GIN (Generalized Inverted Index)
-1. **Tabela Canônica de Tags (`tags`):**
-   * Armazena metadados da tag: `id` (int), `name`, `slug`, `category` (ex: *artist*, *parody*, *character*, *tag*, *language*), `description` e `usage_count` (contador denormalizado para exibir o total de obras publicadas com aquela tag).
+1. **Tabela Canônica de Tags (`tags`) & Localização (`tag_localizations`):**
+   * Metadados canônicos universais com slugs únicos e traduções estruturadas por idioma (`name`, `description`).
 2. **Vetor de Tags na Obra (`mangas`):**
-   * A tabela de obras mantém uma coluna indexada `tag_ids INT[]` ou `tag_slugs TEXT[]`.
+   * A tabela de obras mantém uma coluna indexada `tag_ids INT[]`.
    * Um índice **GIN** é criado sobre essa coluna:
      ```sql
      CREATE INDEX idx_mangas_tag_ids ON mangas USING GIN (tag_ids);
@@ -111,7 +113,7 @@ Fazer múltiplos `JOINs` relacionais clássicos degrada a performance do banco s
    * **Contém todas (+tag1 +tag2):** `WHERE tag_ids @> ARRAY[12, 45]`
    * **Contém qualquer uma (+tag1 OR +tag2):** `WHERE tag_ids && ARRAY[12, 45]`
    * **Excluir (-tag3):** `WHERE NOT (tag_ids @> ARRAY[99])`
-   * Esse modelo executa filtros complexos em **sub-milissegundos**, mesmo com centenas de milhares de obras cadastradas.
+   * Executa filtros complexos em **sub-milissegundos**, mesmo com centenas de milhares de obras cadastradas.
 
 ---
 
@@ -129,23 +131,21 @@ Fazer múltiplos `JOINs` relacionais clássicos degrada a performance do banco s
 
 ### 5.3 Arquitetura de Scrapers Híbrida
 * **Scrapers Leves no Servidor (WASM / JS Sandboxed via Goja):**
-  * Para rodar dentro do próprio host com consumo ínfimo de memória, os conectores de sites externos podem ser implementados em WebAssembly ou scripts leves interpretados em sandbox no Go (via `goja`).
+  * Para rodar dentro do próprio host com consumo ínfimo de memória, os conectores de sites externos rodam em WebAssembly ou scripts leves interpretados em sandbox no Go (via `goja`).
 * **Scrapers Externos em Python (Ingestão Local do Administrador):**
-  * Scrapers complexos (que utilizam Selenium, navegadores headless ou proxies rotativos) podem rodar na máquina pessoal do desenvolvedor/administrador.
+  * Scrapers complexos (Selenium, navegadores headless, proxies rotativos) rodam na máquina pessoal do administrador.
   * O script em Python extrai os dados e faz a ingestão no servidor via rota autenticada da API (`POST /api/v1/ingest/chapter`) usando uma API Key de ingestão segura (`X-API-Key`).
 
 ---
 
 ## 6. Sistema de Moderação e DMCA "Zero Pânico"
 
-Projetado para dar resposta instantânea a solicitações legais ou de moderação:
-
 1. **Soft-Delete Imediato (`dmca_blocked`):**
    * Uma obra ou capítulo pode ter o status alterado instantaneamente para `dmca_blocked` via painel ou chamada de API.
    * O conteúdo deixa de ser servido imediatamente para o público sem quebrar a integridade referencial do banco de dados ou histórico de transações.
 2. **Blacklist de Hashes SHA-256:**
-   * Quando uma mídia é removida por DMCA, o hash criptográfico dos arquivos é registrado em uma tabela de blacklist (`blocked_media_hashes`).
-   * Se um scraper ou usuário tentar re-enviar ou re-importar a mesma obra no futuro, a ingestão é rejeitada automaticamente antes de salvar no disco.
+   * Quando uma mídia é removida por DMCA, o hash criptográfico dos arquivos é registrado na tabela `blocked_media_hashes`.
+   * Se um scraper ou usuário tentar re-enviar a mesma obra no futuro, a ingestão é rejeitada automaticamente antes de salvar no disco.
 
 ---
 
@@ -220,14 +220,14 @@ O repositório inclui suítes padronizadas de testes com **k6 (Grafana)** na pas
 ```text
 honbakoo/
 ├── cmd/
-│   ├── api/               # Servidor HTTP REST & WebSockets (Go)
+│   ├── api/               # Servidor HTTP REST Stateless (Go)
 │   ├── worker/            # Workers de imagem (libvips), views e background jobs
 │   └── cli/               # Comandos de setup, seed e migrations
 ├── internal/
 │   ├── auth/              # Argon2id, JWT rotativo e RBAC
 │   ├── billing/           # Sistema VIP, assinaturas e webhooks
-│   ├── community/         # Comentários (LTree), reações e moderação
-│   ├── content/           # Catálogo: obras, capítulos e tags (GIN)
+│   ├── community/         # Comentários (LTree) em REST puro
+│   ├── content/           # Catálogo: obras, capítulos, tags (GIN), criadores, revistas
 │   ├── storage/           # Abstração de armazenamento (Local FS / S3 API: Cloudflare R2 / B2)
 │   ├── moderation/        # Soft-delete DMCA e blacklist de hashes
 │   ├── singleflight/      # Gerenciamento de deduplicação de requisições concorrentes
