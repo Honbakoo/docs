@@ -2,167 +2,108 @@ openapi: 3.1.0
 info:
   title: Honbakoo Engine API
   version: 1.0.0
-  description: |
-    API RESTful headless, stateless e de altíssima performance para plataformas de entretenimento visual
-    (Mangás, Doujinshis, Manhwas, Animes e Anime-H).
+  description: API RESTful headless, stateless e de altíssima performance para plataformas
+    de entretenimento visual (Mangás, Doujinshis, Manhwas, Animes e Anime-H).
   contact:
     name: Honbakoo Architecture Team
     url: https://github.com/Honbakoo
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
-
 servers:
-  - url: https://api.honbakoo.org/api/v1
-    description: Servidor de Produção (Exemplo)
-  - url: http://localhost:8080/api/v1
-    description: Servidor Local de Desenvolvimento
-
+- url: https://api.honbakoo.org/api/v1
+  description: Produção
+- url: http://localhost:8080/api/v1
+  description: Desenvolvimento Local
+tags:
+- name: Health & System
+  description: Sondas de monitoramento e prontidão
+- name: Auth & Session
+  description: Autenticação, MFA, e-mail e sessões
+- name: Users & Profile
+  description: Dados do leitor, histórico, favoritos e LGPD
+- name: Catalog & Mangas
+  description: Obras, tags, criadores e avaliações
+- name: Reader & Media
+  description: Páginas de leitura e streams de vídeo
+- name: Community & Comments
+  description: Comentários em árvore LTree e reações
+- name: Uploads & Ingestion
+  description: Slots de upload CAS e ingestão
+- name: Reports & Support
+  description: Denúncias e tickets de suporte
+- name: Admin & Moderation
+  description: DMCA, moderação e API Keys
+- name: Webhooks
+  description: Webhooks de gateways de pagamento
 security:
-  - {}
-  - BearerAuth: []
-  - ApiKeyAuth: []
-
+- {}
+- BearerAuth: []
+- ApiKeyAuth: []
 paths:
   /healthz:
     get:
+      tags:
+      - Health & System
       summary: Liveness Probe
-      description: Retorna 200 OK se o processo da aplicação estiver rodando.
       operationId: getLiveness
       responses:
         '200':
           description: Processo saudável
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: ok
-                  timestamp:
-                    type: string
-                    format: date-time
-
   /readyz:
     get:
+      tags:
+      - Health & System
       summary: Readiness Probe
-      description: Retorna 200 OK apenas se as dependências essenciais (PostgreSQL, Storage e Redis se configurado) estiverem saudáveis.
       operationId: getReadiness
       responses:
         '200':
-          description: Aplicação pronta para receber tráfego
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: ready
-                  checks:
-                    type: object
-                    properties:
-                      database:
-                        type: string
-                        example: ok
-                      storage:
-                        type: string
-                        example: ok
+          description: Dependências saudáveis
         '503':
-          description: Uma ou mais dependências estão indisponíveis
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-
+          $ref: '#/components/responses/ServiceUnavailable'
   /auth/register:
     post:
-      summary: Cadastro de Novo Usuário
+      tags:
+      - Auth & Session
+      summary: Registro de novo usuário
       operationId: registerUser
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [username, email, password]
-              properties:
-                username:
-                  type: string
-                  minLength: 3
-                  maxLength: 32
-                  pattern: '^[a-zA-Z0-9_-]+$'
-                  example: leitor_otaku
-                email:
-                  type: string
-                  format: email
-                  example: usuario@exemplo.com
-                password:
-                  type: string
-                  minLength: 8
-                  example: SenhaSegura#2026
-                preferred_language:
-                  type: string
-                  default: pt-br
-                  example: pt-br
+              $ref: '#/components/schemas/RegisterRequest'
       responses:
         '201':
-          description: Usuário cadastrado com sucesso
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserEnvelope'
+          $ref: '#/components/responses/UserResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
         '409':
           $ref: '#/components/responses/Conflict'
-
   /auth/login:
     post:
-      summary: Autenticação de Usuário
+      tags:
+      - Auth & Session
+      summary: Login de usuário
       operationId: loginUser
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [login, password]
-              properties:
-                login:
-                  type: string
-                  description: Email ou Username do usuário
-                  example: usuario@exemplo.com
-                password:
-                  type: string
-                  example: SenhaSegura#2026
+              $ref: '#/components/schemas/LoginRequest'
       responses:
         '200':
-          description: Autenticação realizada com sucesso
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
-                    properties:
-                      user:
-                        $ref: '#/components/schemas/User'
-                      tokens:
-                        $ref: '#/components/schemas/AuthTokens'
+          $ref: '#/components/responses/LoginSuccess'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/TooManyRequests'
-
   /auth/refresh:
     post:
-      summary: Renovação de Token (Rotação de Refresh Token)
+      tags:
+      - Auth & Session
+      summary: Rotação de Refresh Token
       operationId: refreshToken
       requestBody:
         required: true
@@ -170,494 +111,221 @@ paths:
           application/json:
             schema:
               type: object
-              required: [refresh_token]
+              required:
+              - refresh_token
               properties:
                 refresh_token:
                   type: string
-                  example: rt_018d45f3...
       responses:
         '200':
-          description: Novos tokens emitidos com rotação do refresh token
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    $ref: '#/components/schemas/AuthTokens'
+          description: Tokens renovados
         '401':
           $ref: '#/components/responses/Unauthorized'
-
-  /mangas:
-    get:
-      summary: Listagem e Busca de Obras (Catálogo)
-      operationId: listMangas
-      parameters:
-        - name: format
-          in: query
-          schema:
-            $ref: '#/components/schemas/ContentFormat'
-        - name: lang
-          in: query
-          schema:
-            type: string
-            default: pt-br
-            example: pt-br
-        - name: tags_include
-          in: query
-          description: Slugs ou IDs de tags que DEVEM estar presentes (AND)
-          schema:
-            type: array
-            items:
-              type: string
-            example: [romance, acao]
-        - name: tags_exclude
-          in: query
-          description: Slugs ou IDs de tags que NÃO podem estar presentes (NOT)
-          schema:
-            type: array
-            items:
-              type: string
-            example: [netorare, gore]
-        - name: search
-          in: query
-          description: Busca textual de título via pg_trgm
-          schema:
-            type: string
-            example: solo
-        - name: sort
-          in: query
-          schema:
-            type: string
-            enum: [trending, popular, latest, rating]
-            default: trending
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 24
-        - name: cursor
-          in: query
-          description: Cursor opaco para paginação keyset
-          schema:
-            type: string
-            example: eyJpZCI6IjAxOGQ0NWYz...
-      responses:
-        '200':
-          description: Lista de obras encontrada
-          headers:
-            ETag:
-              schema:
-                type: string
-            Cache-Control:
-              schema:
-                type: string
-                example: public, max-age=60, stale-while-revalidate=120
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/MangaSummary'
-                  meta:
-                    $ref: '#/components/schemas/PaginationMeta'
-
-  /mangas/{slug}:
-    get:
-      summary: Detalhes Completos de uma Obra
-      operationId: getMangaBySlug
-      parameters:
-        - name: slug
-          in: path
-          required: true
-          schema:
-            type: string
-            example: solo-leveling
-        - name: lang
-          in: query
-          schema:
-            type: string
-            default: pt-br
-      responses:
-        '200':
-          description: Obra detalhada
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    $ref: '#/components/schemas/MangaDetail'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  /chapters/{id}/pages:
-    get:
-      summary: Páginas de Leitura de um Capítulo (Mangá / Manhwa / Doujinshi)
-      operationId: getChapterPages
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-            example: 018d4610-b23c-7d4e-af5a-6b7c8d9e0f1a
-      responses:
-        '200':
-          description: Manifesto de páginas do capítulo
-          headers:
-            Cache-Control:
-              schema:
-                type: string
-                example: public, max-age=86400, immutable
-            ETag:
-              schema:
-                type: string
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    $ref: '#/components/schemas/ChapterPagesManifest'
-        '403':
-          description: Capítulo restrito a VIPs (Acesso Antecipado)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  /chapters/{id}/sources:
-    get:
-      summary: Fontes de Streaming e Legendas de um Episódio (Anime / Anime-H)
-      operationId: getEpisodeSources
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-      responses:
-        '200':
-          description: Lista de servidores de vídeo e faixas de legenda
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    $ref: '#/components/schemas/EpisodeSourcesManifest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  /chapters/{id}/comments:
-    get:
-      summary: Comentários Hierárquicos de um Capítulo
-      operationId: getChapterComments
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-      responses:
-        '200':
-          description: Árvore hierárquica de comentários
-          headers:
-            Cache-Control:
-              schema:
-                type: string
-                example: public, max-age=30, stale-while-revalidate=60
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Comment'
+  /auth/logout:
     post:
-      summary: Criar Comentário em um Capítulo
+      tags:
+      - Auth & Session
       security:
-        - BearerAuth: []
-      operationId: postComment
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - name: Idempotency-Key
-          in: header
-          required: false
-          schema:
-            type: string
-            format: uuid
+      - BearerAuth: []
+      summary: Revogação da sessão atual
+      operationId: logoutUser
+      responses:
+        '200':
+          description: Deslogado com sucesso
+  /auth/verify-email:
+    post:
+      tags:
+      - Auth & Session
+      summary: Confirmação de token de e-mail
+      operationId: verifyEmail
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [content]
+              required:
+              - token
               properties:
-                parent_id:
+                token:
                   type: string
-                  format: uuid
-                  nullable: true
-                  description: UUIDv7 do comentário pai se for uma resposta
-                content:
-                  type: string
-                  minLength: 1
-                  maxLength: 2000
-                  example: Excelente capítulo! Aguardo a continuação.
-      responses:
-        '201':
-          description: Comentário publicado com sucesso
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    $ref: '#/components/schemas/Comment'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-
-  /uploads/presigned-url:
-    post:
-      summary: Solicitar Slots de Upload com Verificação Prévia de Deduplicação
-      security:
-        - BearerAuth: []
-        - ApiKeyAuth: []
-      operationId: requestUploadSlots
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [files]
-              properties:
-                files:
-                  type: array
-                  items:
-                    type: object
-                    required: [filename, byte_size, sha256_hash, mime_type]
-                    properties:
-                      filename:
-                        type: string
-                        example: 01.webp
-                      byte_size:
-                        type: integer
-                        example: 245100
-                      sha256_hash:
-                        type: string
-                        pattern: '^[a-fA-F0-9]{64}$'
-                        example: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-                      mime_type:
-                        type: string
-                        enum: [image/webp, image/jpeg, image/png, image/avif, video/mp4]
       responses:
         '200':
-          description: Slots de upload autorizados ou arquivos já deduplicados
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
-                    properties:
-                      upload_slots:
-                        type: array
-                        items:
-                          $ref: '#/components/schemas/UploadSlot'
-
-  /reports:
-    post:
-      summary: Criar Denúncia de Conteúdo (Capítulo, Mangá, Comentário ou Usuário)
-      security:
-        - BearerAuth: []
-      operationId: createReport
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [target_type, target_id, reason]
-              properties:
-                target_type:
-                  type: string
-                  enum: [chapter, manga, comment, user]
-                  example: chapter
-                target_id:
-                  type: string
-                  format: uuid
-                  example: 018d4610-b23c-7d4e-af5a-6b7c8d9e0f1a
-                reason:
-                  type: string
-                  enum: [missing_pages, wrong_order, corrupted_images, duplicate_chapter, bad_translation, spoiler_unmarked, harassment_hate, illegal_content, dmca_copyright, other]
-                  example: missing_pages
-                details:
-                  type: string
-                  maxLength: 1000
-                  example: Faltam as páginas 12 e 13 no meio do capítulo.
-      responses:
-        '201':
-          description: Denúncia registrada e encaminhada para a scanlator ou moderação
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
-                    properties:
-                      report_id:
-                        type: string
-                        format: uuid
-                      status:
-                        type: string
-                        example: open
+          description: E-mail verificado
         '400':
           $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-
-  /users/me/library:
-    get:
-      summary: Listar Favoritos do Usuário Autenticado
-      security:
-        - BearerAuth: []
-      operationId: getUserFavorites
-      parameters:
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            default: 24
-        - name: cursor
-          in: query
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Obras favoritadas pelo leitor
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/MangaSummary'
-                  meta:
-                    $ref: '#/components/schemas/PaginationMeta'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
-  /users/me/history:
-    get:
-      summary: Obter Histórico de Leitura do Usuário
-      security:
-        - BearerAuth: []
-      operationId: getReadingHistory
-      responses:
-        '200':
-          description: Histórico de capítulos lidos e progresso de vídeo
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        manga_id:
-                          type: string
-                          format: uuid
-                        manga_title:
-                          type: string
-                        last_chapter_id:
-                          type: string
-                          format: uuid
-                        last_chapter_number:
-                          type: number
-                        last_page:
-                          type: integer
-                        last_video_position_seconds:
-                          type: integer
-                        updated_at:
-                          type: string
-                          format: date-time
-        '401':
-          $ref: '#/components/responses/Unauthorized'
+  /auth/forgot-password:
     post:
-      summary: Atualizar Progresso de Leitura/Vídeo
-      security:
-        - BearerAuth: []
-      operationId: updateReadingProgress
+      tags:
+      - Auth & Session
+      summary: Solicitação de redefinição de senha
+      operationId: forgotPassword
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [manga_id, chapter_id]
+              required:
+              - email
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: E-mail de recuperação enviado (resposta uniforme)
+  /auth/reset-password:
+    post:
+      tags:
+      - Auth & Session
+      summary: Redefinição de senha com token
+      operationId: resetPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - token
+              - new_password
+              properties:
+                token:
+                  type: string
+                new_password:
+                  type: string
+                  minLength: 8
+      responses:
+        '200':
+          description: Senha alterada com sucesso
+  /auth/change-password:
+    post:
+      tags:
+      - Auth & Session
+      security:
+      - BearerAuth: []
+      summary: Alteração de senha autenticada
+      operationId: changePassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - old_password
+              - new_password
+              properties:
+                old_password:
+                  type: string
+                new_password:
+                  type: string
+                  minLength: 8
+      responses:
+        '200':
+          description: Senha atualizada
+  /users/me:
+    get:
+      tags:
+      - Users & Profile
+      security:
+      - BearerAuth: []
+      summary: Perfil do usuário autenticado
+      operationId: getProfile
+      responses:
+        '200':
+          $ref: '#/components/responses/UserResponse'
+    patch:
+      tags:
+      - Users & Profile
+      security:
+      - BearerAuth: []
+      summary: Atualizar dados do perfil
+      operationId: updateProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                preferred_language:
+                  type: string
+                avatar_url:
+                  type: string
+      responses:
+        '200':
+          $ref: '#/components/responses/UserResponse'
+    delete:
+      tags:
+      - Users & Profile
+      security:
+      - BearerAuth: []
+      summary: Exclusão / Anonimização de conta (LGPD)
+      operationId: deleteAccount
+      responses:
+        '200':
+          description: Conta anonimizada e desativada
+  /users/me/export:
+    post:
+      tags:
+      - Users & Profile
+      security:
+      - BearerAuth: []
+      summary: Exportação de dados pessoais (LGPD/GDPR)
+      operationId: exportUserData
+      responses:
+        '200':
+          description: Arquivo JSON com todos os dados do leitor
+  /users/me/library:
+    get:
+      tags:
+      - Users & Profile
+      security:
+      - BearerAuth: []
+      summary: Obras favoritadas do usuário
+      operationId: getLibrary
+      parameters:
+      - name: cursor
+        in: query
+        schema:
+          type: string
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 24
+      responses:
+        '200':
+          description: Lista de favoritos
+  /users/me/history:
+    get:
+      tags:
+      - Users & Profile
+      security:
+      - BearerAuth: []
+      summary: Histórico de leitura e progresso de vídeo
+      operationId: getHistory
+      responses:
+        '200':
+          description: Lista de histórico
+    post:
+      tags:
+      - Users & Profile
+      security:
+      - BearerAuth: []
+      summary: Atualizar progresso de leitura ou posição do vídeo
+      operationId: updateHistory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - manga_id
+              - chapter_id
               properties:
                 manga_id:
                   type: string
@@ -665,33 +333,211 @@ paths:
                 chapter_id:
                   type: string
                   format: uuid
-                page_number:
+                last_page:
                   type: integer
-                  minimum: 1
-                  default: 1
-                video_position_seconds:
+                last_video_position_seconds:
                   type: integer
-                  minimum: 0
-                  default: 0
       responses:
         '200':
-          description: Progresso salvo com sucesso
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
+          description: Progresso registrado
+  /mangas:
+    get:
+      tags:
+      - Catalog & Mangas
+      summary: Busca e catálogo universal
+      operationId: listMangas
+      parameters:
+      - name: format
+        in: query
+        schema:
+          $ref: '#/components/schemas/ContentFormat'
+      - name: lang
+        in: query
+        schema:
+          type: string
+          default: pt-br
+      - name: tags_include
+        in: query
+        schema:
+          type: array
+          items:
+            type: string
+      - name: tags_exclude
+        in: query
+        schema:
+          type: array
+          items:
+            type: string
+      - name: creator
+        in: query
+        schema:
+          type: string
+      - name: search
+        in: query
+        schema:
+          type: string
+      - name: sort
+        in: query
+        schema:
+          type: string
+          enum:
+          - trending
+          - popular
+          - latest
+          - rating
+          default: trending
+      - name: cursor
+        in: query
+        schema:
+          type: string
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 24
+      responses:
+        '200':
+          $ref: '#/components/responses/MangaListResponse'
+  /mangas/{slug}:
+    get:
+      tags:
+      - Catalog & Mangas
+      summary: Detalhes de uma obra
+      operationId: getMangaDetails
+      parameters:
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: lang
+        in: query
+        schema:
+          type: string
+          default: pt-br
+      responses:
+        '200':
+          $ref: '#/components/responses/MangaDetailResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /mangas/{slug}/chapters:
+    get:
+      tags:
+      - Catalog & Mangas
+      summary: Lista de capítulos de uma obra
+      operationId: getMangaChapters
+      parameters:
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: lang
+        in: query
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Lista de capítulos agrupados por idioma e grupo
+  /mangas/{id}/rating:
+    put:
+      tags:
+      - Catalog & Mangas
+      security:
+      - BearerAuth: []
+      summary: Avaliar uma obra (1 a 10)
+      operationId: rateManga
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - rating
+              properties:
+                rating:
+                  type: integer
+                  minimum: 1
+                  maximum: 10
+      responses:
+        '200':
+          description: Avaliação salva
+    delete:
+      tags:
+      - Catalog & Mangas
+      security:
+      - BearerAuth: []
+      summary: Remover avaliação da obra
+      operationId: deleteRating
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Avaliação removida
+  /mangas/{id}/favorite:
+    post:
+      tags:
+      - Catalog & Mangas
+      security:
+      - BearerAuth: []
+      summary: Adicionar aos favoritos
+      operationId: addFavorite
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Obra favoritada
+    delete:
+      tags:
+      - Catalog & Mangas
+      security:
+      - BearerAuth: []
+      summary: Remover dos favoritos
+      operationId: removeFavorite
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Removido dos favoritos
+  /tags:
+    get:
+      tags:
+      - Catalog & Mangas
+      summary: Listar todas as tags canônicas com contadores
+      operationId: listTags
+      responses:
+        '200':
+          description: Lista de tags
   /tags/proposals:
     post:
-      summary: Sugerir Tag para uma Obra (Governança Comunitária)
+      tags:
+      - Catalog & Mangas
       security:
-        - BearerAuth: []
+      - BearerAuth: []
+      summary: Proposta de tag para moderação
       operationId: proposeTag
       requestBody:
         required: true
@@ -699,7 +545,9 @@ paths:
           application/json:
             schema:
               type: object
-              required: [manga_id, tag_id]
+              required:
+              - manga_id
+              - tag_id
               properties:
                 manga_id:
                   type: string
@@ -708,40 +556,443 @@ paths:
                   type: integer
       responses:
         '201':
-          description: Proposta de tag enviada para moderação
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
-                    properties:
-                      proposal_id:
-                        type: string
-                        format: uuid
-                      status:
-                        type: string
-                        example: pending
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
+          description: Proposta submetida
+  /creators/{slug}:
+    get:
+      tags:
+      - Catalog & Mangas
+      summary: Perfil de criador (roteirista/artista)
+      operationId: getCreatorProfile
+      parameters:
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Perfil do criador com obras vinculadas
+  /updates:
+    get:
+      tags:
+      - Catalog & Mangas
+      summary: Feed dos últimos capítulos lançados
+      operationId: getLatestUpdates
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 30
+      responses:
+        '200':
+          description: Últimos lançamentos com thumbnail e grupo
+  /chapters/{id}:
+    get:
+      tags:
+      - Reader & Media
+      summary: Metadados de um capítulo
+      operationId: getChapterMetadata
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Metadados do capítulo
+  /chapters/{id}/pages:
+    get:
+      tags:
+      - Reader & Media
+      summary: Manifesto de páginas para leitura
+      operationId: getChapterPages
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          $ref: '#/components/responses/ChapterPagesManifest'
+        '403':
+          description: Capítulo restrito a assinantes VIP
+  /chapters/{id}/sources:
+    get:
+      tags:
+      - Reader & Media
+      summary: Fontes de streaming e legendas (Anime)
+      operationId: getEpisodeSources
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          $ref: '#/components/responses/EpisodeSourcesManifest'
+  /chapters/{id}/comments:
+    get:
+      tags:
+      - Community & Comments
+      summary: Árvore de comentários do capítulo
+      operationId: getComments
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Árvore de comentários
+    post:
+      tags:
+      - Community & Comments
+      security:
+      - BearerAuth: []
+      summary: Publicar comentário
+      operationId: postComment
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - content
+              properties:
+                parent_id:
+                  type: string
+                  format: uuid
+                content:
+                  type: string
+                  maxLength: 2000
+      responses:
+        '201':
+          description: Comentário publicado
+  /comments/{id}/react:
+    post:
+      tags:
+      - Community & Comments
+      security:
+      - BearerAuth: []
+      summary: Curtir ou descurtir comentário
+      operationId: reactComment
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - is_like
+              properties:
+                is_like:
+                  type: boolean
+      responses:
+        '200':
+          description: Reação registrada
+  /uploads/presigned-url:
+    post:
+      tags:
+      - Uploads & Ingestion
+      security:
+      - BearerAuth: []
+      - ApiKeyAuth: []
+      summary: Solicitar slots de upload CAS (scale)
+      operationId: requestUploadSlots
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresignedRequest'
+      responses:
+        '200':
+          description: Slots gerados
+  /uploads/{upload_id}:
+    put:
+      tags:
+      - Uploads & Ingestion
+      security:
+      - BearerAuth: []
+      - ApiKeyAuth: []
+      summary: Envio direto de arquivo no modo budget
+      operationId: uploadDirectFile
+      parameters:
+      - name: upload_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Arquivo gravado
+  /uploads/complete:
+    post:
+      tags:
+      - Uploads & Ingestion
+      security:
+      - BearerAuth: []
+      - ApiKeyAuth: []
+      summary: Finalização e validação de sessão de upload
+      operationId: completeUpload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - session_id
+              properties:
+                session_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Upload verificado
+  /ingest/manga:
+    post:
+      tags:
+      - Uploads & Ingestion
+      security:
+      - ApiKeyAuth: []
+      summary: Ingestão automatizada de obra
+      operationId: ingestManga
+      responses:
+        '201':
+          description: Obra criada via ingestão
+  /ingest/chapter:
+    post:
+      tags:
+      - Uploads & Ingestion
+      security:
+      - ApiKeyAuth: []
+      summary: Ingestão automatizada de capítulo
+      operationId: ingestChapter
+      responses:
+        '201':
+          description: Capítulo criado via ingestão
+  /reports:
+    post:
+      tags:
+      - Reports & Support
+      security:
+      - BearerAuth: []
+      summary: Abrir denúncia / ticket de suporte
+      operationId: createReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReportRequest'
+      responses:
+        '201':
+          description: Ticket aberto
+  /admin/reports:
+    get:
+      tags:
+      - Admin & Moderation
+      security:
+      - BearerAuth: []
+      summary: Listar denúncias pendentes
+      operationId: listReports
+      parameters:
+      - name: status
+        in: query
+        schema:
+          type: string
+          default: open
+      responses:
+        '200':
+          description: Fila de moderação
+  /admin/reports/{id}:
+    patch:
+      tags:
+      - Admin & Moderation
+      security:
+      - BearerAuth: []
+      summary: Resolver denúncia
+      operationId: resolveReport
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - resolution
+              properties:
+                resolution:
+                  type: string
+                  enum:
+                  - removed
+                  - dismissed
+                  - warned
+                  - banned
+                resolution_note:
+                  type: string
+      responses:
+        '200':
+          description: Denúncia resolvida
+  /admin/dmca/block:
+    post:
+      tags:
+      - Admin & Moderation
+      security:
+      - BearerAuth: []
+      summary: Bloquear obra/capítulo e adicionar hashes à blacklist
+      operationId: dmcaBlock
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - manga_slug
+              - reason
+              properties:
+                manga_slug:
+                  type: string
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Conteúdo bloqueado e purgado
+  /admin/dmca/unblock:
+    post:
+      tags:
+      - Admin & Moderation
+      security:
+      - BearerAuth: []
+      summary: Desbloquear obra contestada
+      operationId: dmcaUnblock
+      responses:
+        '200':
+          description: Desbloqueado
+  /admin/api-keys:
+    get:
+      tags:
+      - Admin & Moderation
+      security:
+      - BearerAuth: []
+      summary: Listar API Keys ativas
+      operationId: listApiKeys
+      responses:
+        '200':
+          description: Lista de chaves
+    post:
+      tags:
+      - Admin & Moderation
+      security:
+      - BearerAuth: []
+      summary: Gerar nova API Key
+      operationId: createApiKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - name
+              - scopes
+              properties:
+                name:
+                  type: string
+                scopes:
+                  type: array
+                  items:
+                    type: string
+                expires_at:
+                  type: string
+                  format: date-time
+      responses:
+        '201':
+          description: Chave gerada (segredo retornado uma única vez)
+  /admin/api-keys/{id}:
+    delete:
+      tags:
+      - Admin & Moderation
+      security:
+      - BearerAuth: []
+      summary: Revogar API Key
+      operationId: revokeApiKey
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Chave revogada
+  /webhooks/billing/{provider}:
+    post:
+      tags:
+      - Webhooks
+      summary: Webhook de provedores de pagamento VIP (Stripe, Pix, Crypto)
+      operationId: handleBillingWebhook
+      parameters:
+      - name: provider
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Evento idempotente processado
 components:
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Token JWT obtido no login (/auth/login).
     ApiKeyAuth:
       type: apiKey
       in: header
       name: X-API-Key
-      description: API Key para automação e ingestão de scanlators (prefixo hbk_).
-
   responses:
     BadRequest:
       description: Requisição inválida
@@ -750,102 +1001,165 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
     Unauthorized:
-      description: Autenticação ausente ou inválida
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorEnvelope'
-    Forbidden:
-      description: Sem permissão para o recurso solicitado
+      description: Não autorizado
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
     NotFound:
-      description: Recurso não encontrado ou removido por moderação/DMCA
+      description: Não encontrado
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
     Conflict:
-      description: Conflito de estado ou duplicidade de registro
+      description: Conflito de chave ou duplicidade
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
     TooManyRequests:
-      description: Limite de requisições excedido (Rate Limit)
-      headers:
-        Retry-After:
-          schema:
-            type: integer
-            example: 60
+      description: Rate limit excedido
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
-
+    ServiceUnavailable:
+      description: Dependência essencial indisponível
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    UserResponse:
+      description: Dados do usuário
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/UserEnvelope'
+    LoginSuccess:
+      description: Autenticado com sucesso
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LoginEnvelope'
+    MangaListResponse:
+      description: Lista de obras
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MangaListEnvelope'
+    MangaDetailResponse:
+      description: Detalhes da obra
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MangaDetailEnvelope'
+    ChapterPagesManifest:
+      description: Manifesto de leitura
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ChapterPagesManifestSchema'
+    EpisodeSourcesManifest:
+      description: Fontes de vídeo
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/EpisodeSourcesManifestSchema'
   schemas:
     ContentFormat:
       type: string
-      enum: [manga, manhwa, manhua, doujinshi, anime_h, anime_m]
-
+      enum:
+      - manga
+      - manhwa
+      - manhua
+      - doujinshi
+      - anime_h
+      - anime_m
     ErrorEnvelope:
       type: object
-      required: [success, error]
+      required:
+      - success
+      - error
       properties:
         success:
           type: boolean
           example: false
         error:
           type: object
-          required: [code, message]
+          required:
+          - code
+          - message
           properties:
             code:
               type: string
-              example: RESOURCE_NOT_FOUND
+              example: BAD_REQUEST
             message:
               type: string
-              example: O mangá solicitado não existe ou foi bloqueado por solicitação legal.
+              example: Dados inválidos.
             details:
               type: object
               nullable: true
-
-    PaginationMeta:
+    RegisterRequest:
       type: object
-      required: [has_more]
+      required:
+      - username
+      - email
+      - password
       properties:
-        next_cursor:
+        username:
           type: string
-          nullable: true
-          example: eyJpZCI6IjAxOGQ0NWYz...
-        has_more:
-          type: boolean
-          example: true
-
+          minLength: 3
+          maxLength: 32
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        preferred_language:
+          type: string
+          default: pt-br
+    LoginRequest:
+      type: object
+      required:
+      - login
+      - password
+      properties:
+        login:
+          type: string
+        password:
+          type: string
     User:
       type: object
-      required: [id, username, email, role, preferred_language]
+      required:
+      - id
+      - username
+      - email
+      - role
+      - preferred_language
       properties:
         id:
           type: string
           format: uuid
         username:
           type: string
-          example: leitor_otaku
         email:
           type: string
           format: email
         role:
           type: string
-          enum: [guest, user, vip, moderator, admin]
+          enum:
+          - guest
+          - user
+          - vip
+          - moderator
+          - admin
         preferred_language:
           type: string
-          example: pt-br
         avatar_url:
           type: string
           nullable: true
-
     UserEnvelope:
       type: object
       properties:
@@ -854,168 +1168,105 @@ components:
           example: true
         data:
           $ref: '#/components/schemas/User'
-
-    AuthTokens:
+    LoginEnvelope:
       type: object
-      required: [access_token, token_type, expires_in, refresh_token]
       properties:
-        access_token:
-          type: string
-          example: eyJhbGciOiJIUzI1Ni...
-        token_type:
-          type: string
-          example: Bearer
-        expires_in:
-          type: integer
-          description: "Tempo de vida em segundos (ex: 900 = 15 minutos)"
-          example: 900
-        refresh_token:
-          type: string
-          example: rt_018d45f3...
-
-    TagSummary:
-      type: object
-      required: [id, name, slug, category]
-      properties:
-        id:
-          type: integer
-          example: 1
-        name:
-          type: string
-          example: Romance
-        slug:
-          type: string
-          example: romance
-        category:
-          type: string
-          enum: [general, artist, circle, parody, character, language]
-
-    CreatorSummary:
-      type: object
-      required: [name, slug, role]
-      properties:
-        name:
-          type: string
-          example: Shindol
-        slug:
-          type: string
-          example: shindol
-        role:
-          type: string
-          enum: [story, art, story_and_art, assistant]
-
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            user:
+              $ref: '#/components/schemas/User'
+            tokens:
+              type: object
+              properties:
+                access_token:
+                  type: string
+                token_type:
+                  type: string
+                  example: Bearer
+                expires_in:
+                  type: integer
+                  example: 900
+                refresh_token:
+                  type: string
     MangaSummary:
       type: object
-      required: [id, display_title, slug, format, reading_direction, is_gallery, is_nsfw, cover_url, views_all_time, rating_score]
       properties:
         id:
           type: string
           format: uuid
         display_title:
           type: string
-          example: Aventuras no Outro Mundo
         original_title:
           type: string
-          example: Otherworldly Adventures
-        original_language:
-          type: string
-          example: ko
         slug:
           type: string
-          example: aventuras-no-outro-mundo
         format:
           $ref: '#/components/schemas/ContentFormat'
         reading_direction:
           type: string
-          enum: [right_to_left, left_to_right, vertical_scroll]
+          enum:
+          - right_to_left
+          - left_to_right
+          - vertical_scroll
         is_gallery:
           type: boolean
-          example: false
         is_nsfw:
           type: boolean
-          example: false
         cover_url:
           type: string
-          format: uri
         views_all_time:
           type: integer
-          format: int64
-          example: 154200
-        views_weekly:
-          type: integer
-          format: int64
-          example: 12800
         rating_score:
           type: string
-          example: '9.45'
-        tags:
-          type: array
-          items:
-            $ref: '#/components/schemas/TagSummary'
-        creators:
-          type: array
-          items:
-            $ref: '#/components/schemas/CreatorSummary'
-
-    MangaDetail:
-      allOf:
-        - $ref: '#/components/schemas/MangaSummary'
-        - type: object
-          properties:
-            display_description:
-              type: string
-              example: Uma história fantástica sobre superação e magia em outro mundo.
-            alt_titles:
-              type: array
-              items:
-                type: string
-            magazine_name:
-              type: string
-              nullable: true
-              example: KakaoPage
-            publisher_name:
-              type: string
-              nullable: true
-              example: D&C Media
-
-    ChapterPagesManifest:
+    MangaListEnvelope:
       type: object
-      required: [chapter_id, reading_direction, pages_count, pages]
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/MangaSummary'
+        meta:
+          type: object
+          properties:
+            next_cursor:
+              type: string
+              nullable: true
+            has_more:
+              type: boolean
+    MangaDetailEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/MangaSummary'
+    ChapterPagesManifestSchema:
+      type: object
       properties:
         chapter_id:
           type: string
           format: uuid
         reading_direction:
           type: string
-          enum: [right_to_left, left_to_right, vertical_scroll]
-        pages_count:
-          type: integer
-          example: 28
         pages:
           type: array
           items:
             type: object
-            required: [page_number, url, width, height, byte_size]
             properties:
               page_number:
                 type: integer
-                example: 1
               url:
                 type: string
-                format: uri
-              width:
-                type: integer
-                example: 1200
-              height:
-                type: integer
-                example: 1800
-              byte_size:
-                type: integer
-                example: 245100
-
-    EpisodeSourcesManifest:
+    EpisodeSourcesManifestSchema:
       type: object
-      required: [chapter_id, sources, subtitles]
       properties:
         chapter_id:
           type: string
@@ -1024,96 +1275,61 @@ components:
           type: array
           items:
             type: object
-            required: [server_name, source_type, resolution, stream_url]
             properties:
               server_name:
                 type: string
-                example: Main Server
-              source_type:
-                type: string
-                enum: [direct_hls, direct_mp4, external_embed]
-              resolution:
-                type: string
-                example: 1080p
               stream_url:
                 type: string
-                format: uri
         subtitles:
           type: array
           items:
             type: object
-            required: [language_code, label, subtitle_url, is_default]
             properties:
               language_code:
                 type: string
-                example: pt-br
-              label:
-                type: string
-                example: Português
               subtitle_url:
                 type: string
-                format: uri
-              is_default:
-                type: boolean
-                example: true
-
-    Comment:
+    PresignedRequest:
       type: object
-      required: [id, user, content, likes_count, dislikes_count, created_at, replies]
+      required:
+      - files
       properties:
-        id:
-          type: string
-          format: uuid
-        parent_id:
-          type: string
-          format: uuid
-          nullable: true
-        user:
-          type: object
-          required: [username, role]
-          properties:
-            username:
-              type: string
-              example: OtakuMaster
-            avatar_url:
-              type: string
-              nullable: true
-            role:
-              type: string
-              enum: [guest, user, vip, moderator, admin]
-        content:
-          type: string
-          example: Esse capítulo foi sensacional!
-        likes_count:
-          type: integer
-          example: 42
-        dislikes_count:
-          type: integer
-          example: 1
-        created_at:
-          type: string
-          format: date-time
-        replies:
+        files:
           type: array
           items:
-            $ref: '#/components/schemas/Comment'
-
-    UploadSlot:
+            type: object
+            required:
+            - filename
+            - byte_size
+            - sha256_hash
+            - mime_type
+            properties:
+              filename:
+                type: string
+              byte_size:
+                type: integer
+              sha256_hash:
+                type: string
+              mime_type:
+                type: string
+    CreateReportRequest:
       type: object
-      required: [filename, sha256_hash, already_exists]
+      required:
+      - target_type
+      - target_id
+      - reason
       properties:
-        filename:
+        target_type:
           type: string
-          example: 01.webp
-        sha256_hash:
+          enum:
+          - chapter
+          - manga
+          - comment
+          - user
+        target_id:
           type: string
-          example: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-        upload_url:
+          format: uuid
+        reason:
           type: string
-          nullable: true
-          description: URL assinada para envio (null se already_exists for true)
-          example: https://storage.honbakoo.org/incoming/temp_e3b0c442...?token=...
-        already_exists:
-          type: boolean
-          description: Se true, o arquivo já existe no banco e o cliente não precisa enviar
-          example: false
+        details:
+          type: string
