@@ -517,6 +517,8 @@ CREATE TYPE scanlation_role AS ENUM ('leader', 'member', 'translator', 'editor',
 CREATE TYPE vip_status AS ENUM ('active', 'past_due', 'canceled', 'expired');
 -- Escopos de API key: ingestão e administração.
 CREATE TYPE api_key_scope AS ENUM ('ingest', 'admin');
+-- Proveniência e conformidade de conteúdo
+CREATE TYPE provenance_type AS ENUM ('scanlator_upload', 'creator_direct', 'licensed_syndicated', 'public_domain');
 
 -- ============================================================================
 -- 2. TABELA DE IDIOMAS (I18N CORE)
@@ -586,6 +588,11 @@ CREATE TABLE users (
     avatar_url VARCHAR(512),
     email_verified_at TIMESTAMPTZ,           -- NULL até confirmar o e-mail
     last_login_at TIMESTAMPTZ,
+    
+    -- AFERIÇÃO DE IDADE E PROTEÇÃO DE MENORES (ECA Digital - Lei nº 15.211/2025 / ANPD)
+    age_verified_at TIMESTAMPTZ,            -- Data da confirmação de maioridade por método confiável
+    age_verification_method VARCHAR(64),    -- 'gov_br_token', 'oidc_age_provider', etc. (Sem autodeclaração simplória)
+    
     -- Entitlement VIP denormalizado para leitura rápida; fonte de verdade: vip_subscriptions.
     vip_until TIMESTAMPTZ,
     is_banned BOOLEAN NOT NULL DEFAULT FALSE,
@@ -752,9 +759,14 @@ CREATE TABLE mangas (
     rating_score NUMERIC(4, 2) NOT NULL DEFAULT 0.00 CHECK (rating_score >= 0 AND rating_score <= 10),
     rating_count INT NOT NULL DEFAULT 0,
     
-    -- MODERAÇÃO E STATUS
+    -- PROVENIÊNCIA E CONFORMIDADE DE DIREITOS
+    provenance provenance_type NOT NULL DEFAULT 'scanlator_upload',
+    source_attribution TEXT,                 -- Licença, link original ou autorização
+    
+    -- MODERAÇÃO, DMCA E QUARENTENA DE EMERGÊNCIA
     is_published BOOLEAN NOT NULL DEFAULT TRUE,
     is_dmca_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+    is_emergency_quarantined BOOLEAN NOT NULL DEFAULT FALSE, -- Bloqueio de emergência (ex: CSAM/Material Ilegal)
     
     published_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -940,6 +952,7 @@ CREATE TABLE media_objects (
     blocked_reason TEXT,
     blurhash VARCHAR(64),                   -- placeholder visual do frontend
     variants JSONB NOT NULL DEFAULT '{}'::jsonb, -- ex.: {"thumb": {"key": "...", "width": 320}}
+    is_restricted_vip BOOLEAN NOT NULL DEFAULT FALSE, -- Se true, armazenado em prefixo restrito com validação de assinatura
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_media_dimensions CHECK ((width IS NULL) = (height IS NULL))
 );
@@ -1110,8 +1123,25 @@ CREATE TABLE blocked_media_hashes (
 );
 
 -- ============================================================================
--- 13. CONFIABILIDADE: IDEMPOTÊNCIA, WEBHOOKS, DENÚNCIAS E AUDITORIA
+-- 13. CONFIABILIDADE: FILAS DURÁVEIS, IDEMPOTÊNCIA, WEBHOOKS E AUDITORIA
 -- ============================================================================
+-- Fila durável transacional para o perfil budget (SKIP LOCKED), garantindo que
+-- jobs de conversão e tarefas nunca se percam no reinício do processo único.
+CREATE TABLE job_queue (
+    id BIGSERIAL PRIMARY KEY,
+    queue_name VARCHAR(64) NOT NULL DEFAULT 'default',
+    payload JSONB NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'pending', -- 'pending', 'processing', 'completed', 'failed'
+    attempts INT NOT NULL DEFAULT 0,
+    max_attempts INT NOT NULL DEFAULT 4,
+    last_error TEXT,
+    run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    locked_until TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_job_queue_fetch ON job_queue (queue_name, run_at) WHERE status = 'pending';
+
 -- Replay seguro de mutações (ADR-0005). TTL de 24h; limpeza por job.
 CREATE TABLE idempotency_keys (
     user_id UUID REFERENCES users(id) ON DELETE CASCADE, -- NULL para ingest via API key
@@ -1206,6 +1236,7 @@ CREATE INDEX idx_audit_log_recent ON audit_log(created_at DESC);
 CREATE INDEX idx_audit_log_actor ON audit_log(actor_id, created_at DESC);
 
 -- +goose Down
+DROP TABLE IF EXISTS job_queue;
 DROP TABLE IF EXISTS user_sanctions;
 DROP TABLE IF EXISTS tag_proposals;
 DROP TABLE IF EXISTS audit_log;

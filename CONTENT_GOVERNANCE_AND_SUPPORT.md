@@ -88,10 +88,28 @@ flowchart TD
 * `harassment_hate`: Discurso de ódio ou assédio nos comentários.
 * `illegal_content`: Conteúdo proibido por lei ou termos de serviço.
 * `dmca_copyright`: Notificação de direitos autorais.
+* `child_exploitation`: **Protocolo P0 de Emergência** (Abuso ou exploração de menores).
 
 ---
 
-## 5. Sistema de Sanções e Auditoria (`user_sanctions`)
+## 5. Protocolo de Emergência para Material Ilegal / CSAM e Cadeia de Custódia
+
+A resposta a material envolvendo exploração de menores ou violações graves não segue o fluxo comum de denúncias:
+
+1. **Quarentena Imediata Sub-Milissegundo (`is_emergency_quarantined`):**
+   * Assim que a denúncia é recebida com a tag `child_exploitation` (ou via webhook automatizado de moderação), a obra/capítulo recebe `is_emergency_quarantined = TRUE` e é deslistada instantaneamente de toda a API pública.
+   * O purge na CDN é disparado na hora.
+2. **Isolamento de Evidência e Princípio do Menor Privilégio:**
+   * O binário da mídia é transferido para um bucket seguro e isolado de custódia judicial (`/evidence/quarantine/...`).
+   * **Zero Visualização por Moderadores Comuns:** Moderadores e scanlators têm acesso completamente revogado ao arquivo para evitar exposição e contaminação de equipe. Apenas administradores designados e auditores legais podem gerar o pacote de evidência com assinatura SHA-256 e timestamp.
+3. **Encaminhamento Legal e Denúncia Formal:**
+   * O sistema registra os dados de conexão do uploader (IP, User Agent e Timestamp sob custódia encriptada) para cooperação formal com autoridades legais (Polícia Federal / SaferNet Brasil / NCMEC internacional).
+4. **Blacklist Criptográfica Permanente:**
+   * O hash SHA-256 é inserido na tabela `blocked_media_hashes` com flag permanente `is_severe_illegal = TRUE`, rejeitando preventivamente qualquer tentativa futura de re-upload em qualquer instância do Honbakoo.
+
+---
+
+## 6. Sistema de Sanções e Auditoria (`user_sanctions`)
 
 Moderadores possuem ferramentas proporcionais de sanção registradas em log de auditoria:
 * **Warning (Advertência):** Alerta formal no perfil do usuário que exige confirmação de leitura.

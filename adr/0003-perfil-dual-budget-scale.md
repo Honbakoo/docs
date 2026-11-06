@@ -29,15 +29,16 @@ O público-alvo inclui operadores em VPS de 1 vCPU / 512MB–1GB. Ao mesmo tempo
 
 ## Decisão
 
-1. `budget` é o padrão: cache LRU (`ristretto`), fila in-process, views em memória, rate limit em memória, storage local com `sendfile`.
-2. `scale` habilita Redis/KeyDB, Asynq, S3/R2/B2 e workers distribuídos.
-3. `CACHE_DRIVER=memory|redis` e `STORAGE_DRIVER=local|s3` são as chaves de troca.
-4. O contrato HTTP é idêntico nos dois perfis; muda a implementação, não a API.
+1. **Topologia Unificada no `budget`:** O binário suporta execução combinada all-in-one (`--role=all`) onde API e workers rodam no mesmo processo compartilhado.
+2. **Fila Durável Compartilhada no `budget` via PostgreSQL (`SKIP LOCKED`):** Em vez de canais em memória voláteis que se perdem no restart e não combinam com processos separados, o `budget` adota fila transacional durável no próprio banco de dados (`table job_queue` com `FOR UPDATE SKIP LOCKED`).
+3. `scale` comuta a fila para Redis/KeyDB + Asynq, storage para S3/R2/B2 e workers distribuídos em nós separados.
+4. `CACHE_DRIVER=memory|redis` e `STORAGE_DRIVER=local|s3` são as chaves de troca.
+5. O contrato HTTP é idêntico nos dois perfis; muda a implementação de infraestrutura, não a API.
 
 ## Consequências
 
-- **Positivas:** custo mínimo real, instalação de um comando, caminho de upgrade claro.
-- **Negativas:** duas implementações para testar; o budget é single-node e perde cache/fila ao reiniciar.
+- **Positivas:** custo mínimo real, sem perda de jobs no restart do budget, sem necessidade de Redis em 512MB de RAM, caminho de upgrade claro.
+- **Negativas:** duas implementações para testar (`job_queue` Postgres vs Asynq Redis).
 - **Operacionais:** CI precisa rodar a suíte nos dois perfis (ou ao menos nos pontos de interface).
 
 ## Gatilho de revisão

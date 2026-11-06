@@ -29,11 +29,13 @@ Banda é o maior custo de uma plataforma de leitura. O projeto precisa servir mi
 
 ## Decisão
 
-1. A imagem é pública e imutável; o hash SHA-256 funciona como capability.
-2. A autorização fica no **manifesto** (`GET /chapters/:id/pages`), que é `private, no-store`.
-3. Quando houver VIP/early access, o manifesto devolve URLs assinadas de curta duração; a imagem continua cacheável.
-4. **Resiliência Multi-Storage e Mirrors (Anti-ToS/Deplatforming):** A URL base da mídia não fica engessada em um único provedor de S3. O manifesto pode entregar URLs primárias e mirrors alternativos (ex: R2 primário + Backblaze B2 secundário ou VPS MinIO). Se um provedor bloquear o bucket ou suspender a conta, o frontend comuta o mirror automaticamente sem quebrar as leituras.
-5. DMCA usa `blocked_media_hashes` para impedir reingestão; a remoção é soft-delete.
+1. **Separação Rígida de Prefixos de Storage (Público vs VIP):**
+   * **Mídia Pública (`/media/public/{sha256}.webp`):** Imutável, aberta na CDN (`Cache-Control: public, max-age=31536000, immutable`), o hash SHA-256 é a capability de busca.
+   * **Mídia VIP / Early Access (`/media/restricted/{chapter_id}/{sha256}.webp`):** Armazenada sob prefixo privado restrito. A CDN/Origem exige token de assinatura HMAC válido no query param (`?token=...&exp=...`) validado na borda ou no Origin Auth. Usuários sem assinatura VIP não conseguem baixar imagens diretamente por dedução de hash.
+   * **Liberação Temporal Automática:** Quando o capítulo atinge `available_public_at`, a rota de manifesto passa a entregar os links no prefixo `/media/public/`, liberando o cache irrestrito global.
+2. A autorização principal fica no **manifesto** (`GET /chapters/:id/pages`), que é sempre `private, no-store`.
+3. **Resiliência Multi-Storage e Mirrors (Anti-ToS/Deplatforming):** A URL base da mídia não fica engessada em um único provedor de S3. O manifesto pode entregar URLs primárias e mirrors alternativos (ex: R2 primário + Backblaze B2 secundário ou VPS MinIO). Se um provedor bloquear o bucket ou suspender a conta, o frontend comuta o mirror automaticamente sem quebrar as leituras.
+4. DMCA usa `blocked_media_hashes` para impedir reingestão; a remoção é soft-delete.
 
 ## Consequências
 

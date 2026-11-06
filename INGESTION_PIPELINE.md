@@ -71,6 +71,26 @@ interface HonbakooConnector {
 * **TLS Client Hello Spoofing:** Conectores HTTP utilizam `curl-impersonate` para imitar os cabeçalhos de handshake TLS de um navegador Chrome desktop real.
 * **Pool de Proxies Rotativos:** Configurado por variável de ambiente (`INGEST_PROXY_POOL=http://user:pass@proxy1,http://...`), permitindo alternar IPs de saída caso a fonte imponha rate limit geográfico.
 
+### 3.2 Defesa Estrita contra SSRF e DNS Rebinding (OWASP Compliance)
+Conectores buscam URLs externas de terceiros; permitir requisições cegas sem restrição de rede expõe a infraestrutura interna (metadados AWS/Cloud, portas locais do Postgres e Redis). O pipeline implementa defesa em camadas:
+
+1. **Validação do Endereço IP Conectado (Anti-DNS Rebinding):**
+   * A resolução DNS é desacoplada da conexão.
+   * O cliente HTTP em Go utiliza um `net.Dialer.Control` personalizado: após a resolução DNS do domínio de destino, o IP IPV4/IPV6 efetivo é inspecionado antes do handshake TCP.
+   * **Bloqueio Incondicional de Ranges Privados e Reservados:**
+     * `127.0.0.0/8` (Loopback / Localhost)
+     * `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (RFC 1918 Private LAN)
+     * `169.254.0.0/16` (Link-Local e Cloud Instance Metadata: `169.254.169.254`)
+     * `::1/128`, `fc00::/7`, `fe80::/10` (IPv6 Local e Link-Local)
+     * Se o IP resolvido pertencer a qualquer uma dessas faixas, **a conexão é abortada antes do primeiro byte de tráfego**.
+2. **Restrição Rígida de Redirecionamentos HTTP:**
+   * O cliente HTTP não segue redirecionamentos cegamente (`CheckRedirect` hook).
+   * Cada salto (`301/302/307`) passa pela mesma validação de DNS e checagem de IP proibido. Limite máximo de **3 redirecionamentos**.
+3. **Limitação de Duração e Tamanho de Download:**
+   * Timeout de conexão: 5 segundos.
+   * Timeout total de download por mídia: 15 segundos.
+   * Streaming delimitado por `io.LimitReader`: downloads que ultrapassarem 15MB são cortados imediatamente para evitar Denial of Service por streams infinitos.
+
 ---
 
 ## 4. Política de Retentativas e Dead Letter Queue (DLQ)

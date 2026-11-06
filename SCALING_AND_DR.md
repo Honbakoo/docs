@@ -72,9 +72,15 @@ sequenceDiagram
     Note over NewHost: Sistema 100% operacional em < 15 minutos!
 ```
 
-### Métricas de DR (RPO e RTO):
-* **RPO (Recovery Point Objective):** Máximo de **24 horas** de dados (frequência do dump automatizado) ou **1 hora** se o WAL Archiving para S3 estiver ativado.
-* **RTO (Recovery Time Objective):** Menos de **15 minutos** para subir a nova instância e apontar o DNS.
+### Métricas de DR (RPO e RTO) — Objetivos a Validar via Simulado:
+* **RPO Alvo (Recovery Point Objective):**
+  * *Com Dump Diário:* Perda de até 24 horas de dados transacionais.
+  * *Com WAL Archiving Ativo (`wal-g` / `pgbackrest` para S3):* Perda máxima de **15 a 60 minutos** de dados. O PostgreSQL envia continuamente segmentos compactados de WAL para o bucket de backup, permitindo Point-in-Time Recovery (PITR).
+* **RTO Alvo (Recovery Time Objective):** Meta de **< 15 a 30 minutos** sujeita a validação em simulados periódicos cronometrados.
+
+### Procedimento de Simulação de Desastre (Fire Drill Semestral):
+1. **Automação de Restauração:** O script `scripts/dr-restore.sh` executa o provisionamento standalone a partir do bucket frio sem intervenção manual em comandos soltos.
+2. **Cronometragem e Critério de Aceite:** A equipe executa o simulado a cada 6 meses em ambiente de homologação limpo; o teste só é considerado aprovado se a aplicação responder `GET /readyz` em menos de 20 minutos com integridade referencial íntegra.
 
 ### Como as mídias ficam seguras durante o DR?
 Como o Honbakoo adota o padrão **Content-Addressed Storage (CAS)** e **Zero-Egress S3 (Cloudflare R2 / Backblaze B2)**:
