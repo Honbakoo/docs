@@ -39,6 +39,12 @@ O **Honbakoo** é uma engine de backend modular, headless e de altíssima perfor
   * Topologia budget/scale, configuração e migrations.
   * Métricas, SLOs, backup/restore e runbooks.
   * Deploy, rollback, capacidade e custo.
+* 🚨 **[Runbooks Operacionais (RUNBOOKS.md)](./RUNBOOKS.md)**:
+  * Procedimentos passo a passo para resolução de incidentes.
+  * Esgotamento de disco, database locks e falha de Redis.
+  * Takedowns DMCA em < 5 minutos e rotação emergencial de segredos.
+* 📄 **[Contrato Executável OpenAPI 3.1 (api/openapi.yaml)](./api/openapi.yaml)**:
+  * Especificação formal lintada pronta para geração de clientes SDK (TypeScript, Dart/Flutter, Python).
 * 🧪 **[Estratégia de Testes (TESTING.md)](./TESTING.md)**:
   * Unit, integração com Testcontainers, contrato, E2E e k6.
   * Gates de CI e definition of done.
