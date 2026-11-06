@@ -69,6 +69,10 @@ O **Honbakoo** é uma engine de backend modular, headless e de altíssima perfor
 * 💎 **[Modelo de Monetização VIP e Early Access (ADR-0016)](./adr/0016-modelo-vip-monetizacao-hentai-manga.md)**:
   * Acesso antecipado temporal (Early Access) vs exclusividade permanente (Paywall seletivo/Uncensored).
   * Vantagens QoL para apoiadores: download de capítulos em `.cbz` em 1 clique e resolução original lossless.
+* ⚙️ **[Especificação de Configuração Self-Hosted (CONFIGURATION.md)](./CONFIGURATION.md)**:
+  * Hierarquia de 3 camadas: defaults embutidos, `.env` estruturado e tabela `system_settings` com hot-reload.
+  * Mapeamento completo de variáveis de ambiente (`HONBAKOO__SECTION__KEY`).
+  * Endpoint público de configuração do frontend (`GET /api/v1/config`).
 
 ---
 

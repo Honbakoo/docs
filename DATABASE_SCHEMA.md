@@ -1126,8 +1126,17 @@ CREATE TABLE blocked_media_hashes (
 );
 
 -- ============================================================================
--- 13. CONFIABILIDADE: FILAS DURÁVEIS, IDEMPOTÊNCIA, WEBHOOKS E AUDITORIA
+-- 13. CONFIABILIDADE: FILAS DURÁVEIS, CONFIGURAÇÕES, IDEMPOTÊNCIA E AUDITORIA
 -- ============================================================================
+-- Configurações dinâmicas com hot-reload (Camada 3) gerenciadas pelo Painel Admin
+CREATE TABLE system_settings (
+    key VARCHAR(64) PRIMARY KEY,
+    value JSONB NOT NULL,
+    description TEXT,
+    is_public BOOLEAN NOT NULL DEFAULT FALSE, -- Se true, exposto em GET /api/v1/config
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Fila durável transacional para o perfil budget (SKIP LOCKED), garantindo que
 -- jobs de conversão e tarefas nunca se percam no reinício do processo único.
 CREATE TABLE job_queue (
@@ -1239,6 +1248,7 @@ CREATE INDEX idx_audit_log_recent ON audit_log(created_at DESC);
 CREATE INDEX idx_audit_log_actor ON audit_log(actor_id, created_at DESC);
 
 -- +goose Down
+DROP TABLE IF EXISTS system_settings;
 DROP TABLE IF EXISTS job_queue;
 DROP TABLE IF EXISTS user_sanctions;
 DROP TABLE IF EXISTS tag_proposals;
