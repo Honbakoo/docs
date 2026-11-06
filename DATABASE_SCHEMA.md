@@ -1,22 +1,31 @@
-# 🗄️ Honbakoo Database Schema & Data Modeling
+# 🗄️ Honbakoo Universal Database Schema & Data Modeling
 
 > **Engine:** PostgreSQL 16+  
 > **Migration Runner:** Goose (`embed.FS`)  
-> **Query Engine:** `sqlc` + `pgx/v5` (Zero ORM, SQL Nativo fortemente tipado)  
-> **Identificadores:** UUIDv7 (Ordenados por tempo, sem fragmentação de B-Tree)
+> **Query Engine:** `sqlc` + `pgx/v5` (Zero ORM, SQL Nativo compilado fortemente tipado)  
+> **Identificadores:** UUIDv7 (Ordenados temporalmente, sem fragmentação de B-Tree)  
+> **Escopo Universal:** Suporte nativo a Mangá, Doujinshi (Galerias/One-shot), Manhwa (Webtoons verticais), Anime e Anime-H (Vídeo HLS/Embeds).
 
 ---
 
-## 1. Princípios da Modelagem de Dados
+## 1. Princípios da Modelagem Universal
 
-1. **Hiper-otimização para Leitura e Filtros (Read-Heavy):** Índices GIN sobre arrays de tags (`tag_ids INT[]`) para resolução de filtros booleanos (`+tag1 -tag2`) em menos de 2ms.
-2. **Sem Bloqueios de Linha (Row Locks):** Contadores de visualizações (`views_count`) são atualizados em batch via Redis, sem escritas contínuas em tempo real na tabela principal.
-3. **Comentários Hierárquicos com LTree:** Árvores de comentários infinitas recuperadas em uma única query SQL indexada (`USING GIST(path)`).
-4. **Segurança e Conformidade (DMCA/Moderação):** Blacklist de hashes SHA-256 e suporte a soft-delete em nível de obra/capítulo.
+1. **Flexibilidade Camaleônica (Manga, Webtoon, Doujinshi, Anime):**
+   * Uma obra pode ser uma **série tradicional** (capítulos seriados), uma **galeria one-shot** (doujinshis de capítulo único com leitura direta de páginas) ou uma **série de animação** (episódios de vídeo).
+   * Suporte nativo a direções de leitura: `right_to_left` (mangá tradicional), `left_to_right` (ocidental/manhua) e `vertical_scroll` (webtoon/manhwa).
+2. **Suporte a Múltiplos Grupos de Tradução (Scanlators / Fansubs):**
+   * Capítulos idênticos podem ser traduzidos e lançados por diferentes grupos sem colisão de constraints no banco.
+3. **Dualidade de Vídeo (HLS Próprio vs. Embeds Externos):**
+   * Instâncias com orçamento zero de banda podem servir vídeo via provedores externos de embed, sem gastar 1 byte do servidor.
+   * Instâncias dedicadas podem servir HLS (`.m3u8`) com múltiplas resoluções e faixas de legenda `.vtt` desacopladas.
+4. **Hiper-otimização para Tags (Estilo NHentai):**
+   * Vetor de tags `tag_ids INT[]` com índice GIN para resolução de filtros booleanos (`+tag1 -tag2 artist:shindol language:pt`) em menos de 2ms.
+5. **Comunidade Hierárquica em Árvore com LTree:**
+   * Comentários aninhados infinitos recuperados em uma única query rápida.
 
 ---
 
-## 2. Diagrama de Relacionamento de Entidades (ERD)
+## 2. Diagrama de Relacionamento de Entidades (ERD Universal)
 
 ```mermaid
 erDiagram
@@ -25,106 +34,88 @@ erDiagram
     USERS ||--o{ READING_HISTORY : tracks
     USERS ||--o{ COMMENTS : writes
     USERS ||--o{ VIP_SUBSCRIPTIONS : owns
+    USERS ||--o{ SCANLATION_MEMBERS : participates
 
-    TAGS ||--o{ MANGA_TAGS : maps
+    SCANLATION_GROUPS ||--o{ SCANLATION_MEMBERS : contains
+    SCANLATION_GROUPS ||--o{ CHAPTERS : releases
+
+    TAGS ||--o{ MANGAS : classified_in
     MANGAS ||--o{ CHAPTERS : contains
-    CHAPTERS ||--o{ CHAPTER_PAGES : has
+    
+    CHAPTERS ||--o{ CHAPTER_PAGES : has_pages
+    CHAPTERS ||--o{ EPISODE_SOURCES : has_videos
+    CHAPTERS ||--o{ EPISODE_SUBTITLES : has_subtitles
     CHAPTERS ||--o{ COMMENTS : receives
+    
     MEDIA_OBJECTS ||--o{ CHAPTER_PAGES : references
-
-    USERS {
-        uuid id PK
-        string username UK
-        string email UK
-        string password_hash
-        string role
-        boolean is_banned
-        timestamp created_at
-    }
-
-    TAGS {
-        int id PK
-        string name
-        string slug UK
-        string category
-        text description
-        int usage_count
-    }
+    MEDIA_OBJECTS ||--o{ EPISODE_SUBTITLES : references
 
     MANGAS {
         uuid id PK
         string title
-        string alt_titles
         string slug UK
-        text description
-        string type
-        string status
-        string cover_url
+        string content_format
+        string reading_direction
         int[] tag_ids
         bigint views_count
-        timestamp published_at
+        boolean is_gallery
     }
 
     CHAPTERS {
         uuid id PK
         uuid manga_id FK
+        uuid group_id FK
         numeric chapter_number
-        string volume_number
-        string title
+        string media_type
         string language
         boolean is_vip_early_access
-        timestamp available_public_at
-        bigint views_count
     }
 
-    MEDIA_OBJECTS {
-        uuid id PK
-        string sha256_hash UK
-        string storage_path
-        int byte_size
-        int width
-        int height
-        string mime_type
-    }
-
-    CHAPTER_PAGES {
+    EPISODE_SOURCES {
         uuid id PK
         uuid chapter_id FK
-        uuid media_id FK
-        int page_number
+        string source_type
+        string resolution
+        string stream_url
     }
 
-    COMMENTS {
+    EPISODE_SUBTITLES {
         uuid id PK
-        uuid user_id FK
         uuid chapter_id FK
-        ltree path
-        text content
-        int likes_count
-        boolean is_deleted
+        string language
+        string subtitle_url
     }
 ```
 
 ---
 
-## 3. Schema DDL Completo (Goose Migration: `00001_initial_schema.sql`)
+## 3. Schema DDL Completo (Goose Migration: `00001_universal_schema.sql`)
 
 ```sql
 -- +goose Up
 -- ============================================================================
--- EXTENSÕES POSTGRESQL
+-- EXTENSÕES POSTGRESQL NATIVAS
 -- ============================================================================
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";   -- Busca textual eficiente de títulos
-CREATE EXTENSION IF NOT EXISTS "ltree";     -- Árvores de comentários de alta performance
+CREATE EXTENSION IF NOT EXISTS "ltree";     -- Árvores de comentários hierárquicas
 
 -- ============================================================================
--- 1. USUÁRIOS, AUTENTICAÇÃO E VIP
+-- 1. TIPOS ENUMERADOS DO SISTEMA
 -- ============================================================================
 CREATE TYPE user_role AS ENUM ('guest', 'user', 'vip', 'moderator', 'admin');
+CREATE TYPE tag_category AS ENUM ('general', 'artist', 'circle', 'parody', 'character', 'language');
+CREATE TYPE content_format AS ENUM ('manga', 'manhwa', 'manhua', 'doujinshi', 'anime_h', 'anime_m');
+CREATE TYPE publication_status AS ENUM ('ongoing', 'completed', 'hiatus', 'cancelled');
+CREATE TYPE reading_direction AS ENUM ('right_to_left', 'left_to_right', 'vertical_scroll');
+CREATE TYPE media_type AS ENUM ('image_pages', 'video_stream');
+CREATE TYPE video_source_type AS ENUM ('direct_hls', 'direct_mp4', 'external_embed');
 
+-- ============================================================================
+-- 2. USUÁRIOS, AUTENTICAÇÃO E VIP
+-- ============================================================================
 CREATE TABLE users (
-    id UUID PRIMARY KEY,                    -- UUIDv7 gerado pela aplicação
+    id UUID PRIMARY KEY,                    -- UUIDv7
     username VARCHAR(32) NOT NULL UNIQUE,
     email VARCHAR(255) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,    -- Argon2id
@@ -159,50 +150,64 @@ CREATE TABLE vip_subscriptions (
 CREATE INDEX idx_vip_user_expires ON vip_subscriptions(user_id, expires_at);
 
 -- ============================================================================
--- 2. TAGS, GÊNEROS E METADADOS
+-- 3. GRUPOS DE TRADUÇÃO / SCANLATION / FANSUBS
 -- ============================================================================
-CREATE TYPE tag_category AS ENUM (
-    'general',     -- tags de conteúdo (ex: 'mind break', 'netorare', 'romance')
-    'artist',      -- autor / artista (ex: 'shindol')
-    'circle',      -- círculo / grupo
-    'parody',      -- franquia / anime original (ex: 'fate stay night', 'naruto')
-    'character',   -- personagem específico
-    'language'     -- idioma (ex: 'portuguese', 'english', 'japanese')
+CREATE TABLE scanlation_groups (
+    id UUID PRIMARY KEY,                    -- UUIDv7
+    name VARCHAR(128) NOT NULL,
+    slug VARCHAR(128) NOT NULL UNIQUE,
+    description TEXT,
+    website_url VARCHAR(255),
+    discord_url VARCHAR(255),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE scanlation_members (
+    group_id UUID NOT NULL REFERENCES scanlation_groups(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role VARCHAR(32) NOT NULL DEFAULT 'member', -- 'leader', 'translator', 'editor'
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (group_id, user_id)
+);
+
+-- ============================================================================
+-- 4. TAGS E METADADOS ESTILO NHENTAI
+-- ============================================================================
 CREATE TABLE tags (
     id SERIAL PRIMARY KEY,
     name VARCHAR(64) NOT NULL,
     slug VARCHAR(64) NOT NULL UNIQUE,
     category tag_category NOT NULL DEFAULT 'general',
     description TEXT,
-    usage_count INT NOT NULL DEFAULT 0,     -- Denormalizado para ordenação rápida
+    usage_count INT NOT NULL DEFAULT 0,     -- Denormalizado para contagem e ordenação rápida
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX idx_tags_category ON tags(category);
 CREATE INDEX idx_tags_usage ON tags(usage_count DESC);
+CREATE INDEX idx_tags_name_trgm ON tags USING GIN (name gin_trgm_ops);
 
 -- ============================================================================
--- 3. OBRAS (MANGAS, DOUJINSHIS, ANIMES)
+-- 5. OBRAS (MANGAS, DOUJINSHIS, WEBTOONS, ANIMES)
 -- ============================================================================
-CREATE TYPE content_type AS ENUM ('manga', 'manhwa', 'manhua', 'doujinshi', 'anime_h', 'anime_m');
-CREATE TYPE publication_status AS ENUM ('ongoing', 'completed', 'hiatus', 'cancelled');
-
 CREATE TABLE mangas (
     id UUID PRIMARY KEY,                    -- UUIDv7
     title VARCHAR(255) NOT NULL,
     alt_titles TEXT[] DEFAULT '{}',
     slug VARCHAR(255) NOT NULL UNIQUE,
     description TEXT,
-    type content_type NOT NULL DEFAULT 'manga',
+    format content_format NOT NULL DEFAULT 'manga',
     status publication_status NOT NULL DEFAULT 'ongoing',
+    reading_direction reading_direction NOT NULL DEFAULT 'right_to_left',
+    
+    -- MODO GALERIA / ONE-SHOT (Para doujinshis e galerias onde o leitor abre as páginas direto)
+    is_gallery BOOLEAN NOT NULL DEFAULT FALSE,
     is_nsfw BOOLEAN NOT NULL DEFAULT TRUE,
     cover_url VARCHAR(512) NOT NULL,
     
-    -- TAGS HIPER-OTIMIZADAS VIA ARRAY + GIN
+    -- TAGS HIPER-OTIMIZADAS VIA ARRAY + ÍNDICE GIN
     tag_ids INT[] NOT NULL DEFAULT '{}',
     
-    -- CONTADORES DESNORMALIZADOS (ATUALIZADOS VIA BATCH FLUSH DO REDIS)
+    -- CONTADORES ATÔMICOS (FLUSHED PERIODICAMENTE DO REDIS)
     views_count BIGINT NOT NULL DEFAULT 0,
     favorites_count INT NOT NULL DEFAULT 0,
     
@@ -218,23 +223,29 @@ CREATE TABLE mangas (
 -- ÍNDICES DE PERFORMANCE EXTREMA
 CREATE INDEX idx_mangas_tag_ids ON mangas USING GIN (tag_ids);
 CREATE INDEX idx_mangas_title_trgm ON mangas USING GIN (title gin_trgm_ops);
+CREATE INDEX idx_mangas_format ON mangas(format) WHERE is_published = TRUE AND is_dmca_blocked = FALSE;
 CREATE INDEX idx_mangas_views ON mangas(views_count DESC) WHERE is_published = TRUE AND is_dmca_blocked = FALSE;
 CREATE INDEX idx_mangas_latest ON mangas(created_at DESC) WHERE is_published = TRUE AND is_dmca_blocked = FALSE;
 
 -- ============================================================================
--- 4. CAPÍTULOS E EPISÓDIOS
+-- 6. CAPÍTULOS E EPISÓDIOS (PÁGINAS OU VÍDEOS)
 -- ============================================================================
 CREATE TABLE chapters (
     id UUID PRIMARY KEY,                    -- UUIDv7
     manga_id UUID NOT NULL REFERENCES mangas(id) ON DELETE CASCADE,
-    chapter_number NUMERIC(7, 2) NOT NULL,  -- suporta 1, 10.5, etc.
+    group_id UUID REFERENCES scanlation_groups(id) ON DELETE SET NULL,
+    
+    chapter_number NUMERIC(7, 2) NOT NULL DEFAULT 1, -- 1, 10.5, etc.
     volume_number VARCHAR(16),
     title VARCHAR(255),
     language VARCHAR(10) NOT NULL DEFAULT 'pt-br',
     
-    -- ACESSO VIP / ANTECIPADO
+    -- TIPO DE MÍDIA: 'image_pages' (mangá/galeria) OU 'video_stream' (anime)
+    media_type media_type NOT NULL DEFAULT 'image_pages',
+    
+    -- ACESSO ANTECIPADO / VIP
     is_vip_early_access BOOLEAN NOT NULL DEFAULT FALSE,
-    available_public_at TIMESTAMPTZ,        -- Quando vira público para free users
+    available_public_at TIMESTAMPTZ,
     
     views_count BIGINT NOT NULL DEFAULT 0,
     is_published BOOLEAN NOT NULL DEFAULT TRUE,
@@ -243,18 +254,18 @@ CREATE TABLE chapters (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    CONSTRAINT uq_manga_chapter UNIQUE (manga_id, chapter_number, language)
+    -- Permite múltiplos scanlators para o mesmo capítulo sem colisão
+    CONSTRAINT uq_manga_chapter_group UNIQUE (manga_id, chapter_number, language, group_id)
 );
 CREATE INDEX idx_chapters_manga ON chapters(manga_id, chapter_number ASC);
 CREATE INDEX idx_chapters_vip_release ON chapters(available_public_at) WHERE is_vip_early_access = TRUE;
 
 -- ============================================================================
--- 5. STORAGE DEDUPLICADO (CAS) E PÁGINAS DE CAPÍTULO
+-- 7. STORAGE DEDUPLICADO (CAS) E PÁGINAS DE MANGÁ
 -- ============================================================================
--- Tabela para evitar arquivos repetidos (deduplicação por Hash SHA-256)
 CREATE TABLE media_objects (
     id UUID PRIMARY KEY,                    -- UUIDv7
-    sha256_hash CHAR(64) NOT NULL UNIQUE,   -- Hash do arquivo para deduplicação
+    sha256_hash CHAR(64) NOT NULL UNIQUE,   -- Hash do arquivo para deduplicação absoluta
     storage_path VARCHAR(512) NOT NULL,     -- Caminho relativo no S3 ou Disco Local
     byte_size INT NOT NULL,
     width INT NOT NULL,
@@ -276,14 +287,44 @@ CREATE TABLE chapter_pages (
 CREATE INDEX idx_chapter_pages_lookup ON chapter_pages(chapter_id, page_number ASC);
 
 -- ============================================================================
--- 6. COMUNIDADE: COMENTÁRIOS COM LTREE (ÁRVORE HIERÁRQUICA)
+-- 8. STREAMING DE VÍDEO (ANIME / ANIME-H): FONTES E LEGENDAS
+-- ============================================================================
+CREATE TABLE episode_sources (
+    id UUID PRIMARY KEY,                    -- UUIDv7
+    chapter_id UUID NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+    source_type video_source_type NOT NULL DEFAULT 'direct_hls',
+    
+    -- Ex: '1080p', '720p', '480p', 'auto'
+    resolution VARCHAR(16) NOT NULL DEFAULT '1080p',
+    
+    -- URL do stream (.m3u8, .mp4) ou URL de iframe de player externo
+    stream_url VARCHAR(1024) NOT NULL,
+    server_name VARCHAR(64) NOT NULL DEFAULT 'Main Server', -- 'Streamtape', 'Dood', 'HLS Local'
+    
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_episode_sources_chapter ON episode_sources(chapter_id);
+
+CREATE TABLE episode_subtitles (
+    id UUID PRIMARY KEY,
+    chapter_id UUID NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+    language VARCHAR(10) NOT NULL DEFAULT 'pt-br',
+    label VARCHAR(32) NOT NULL DEFAULT 'Português',
+    subtitle_url VARCHAR(1024) NOT NULL,    -- Arquivo WebVTT (.vtt)
+    is_default BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_episode_subtitles_chapter ON episode_subtitles(chapter_id);
+
+-- ============================================================================
+-- 9. COMUNIDADE: COMENTÁRIOS COM LTREE (ÁRVORE HIERÁRQUICA)
 -- ============================================================================
 CREATE TABLE comments (
     id UUID PRIMARY KEY,                    -- UUIDv7
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     chapter_id UUID NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
     
-    -- HIERARQUIA COM LTREE (ex: 'root', 'root.commentA', 'root.commentA.replyB')
+    -- Hierarquia indexada LTree (ex: 'root.commentA.replyB')
     path LTREE NOT NULL,
     content TEXT NOT NULL,
     
@@ -298,7 +339,7 @@ CREATE INDEX idx_comments_path ON comments USING GIST (path);
 CREATE INDEX idx_comments_chapter ON comments(chapter_id, created_at DESC);
 
 -- ============================================================================
--- 7. FAVORITOS E HISTÓRICO DE LEITURA
+-- 10. HISTÓRICO, FAVORITOS E MODERAÇÃO DMCA
 -- ============================================================================
 CREATE TABLE user_favorites (
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -312,13 +353,11 @@ CREATE TABLE reading_history (
     manga_id UUID NOT NULL REFERENCES mangas(id) ON DELETE CASCADE,
     last_chapter_id UUID NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
     last_page INT NOT NULL DEFAULT 1,
+    last_video_position_seconds INT NOT NULL DEFAULT 0, -- Progresso de vídeo para animes
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (user_id, manga_id)
 );
 
--- ============================================================================
--- 8. MODERAÇÃO E BLACKLIST DMCA
--- ============================================================================
 CREATE TABLE blocked_media_hashes (
     sha256_hash CHAR(64) PRIMARY KEY,
     reason TEXT NOT NULL,
@@ -331,55 +370,56 @@ DROP TABLE IF EXISTS blocked_media_hashes;
 DROP TABLE IF EXISTS reading_history;
 DROP TABLE IF EXISTS user_favorites;
 DROP TABLE IF EXISTS comments;
+DROP TABLE IF EXISTS episode_subtitles;
+DROP TABLE IF EXISTS episode_sources;
 DROP TABLE IF EXISTS chapter_pages;
 DROP TABLE IF EXISTS media_objects;
 DROP TABLE IF EXISTS chapters;
 DROP TABLE IF EXISTS mangas;
 DROP TABLE IF EXISTS tags;
+DROP TABLE IF EXISTS scanlation_members;
+DROP TABLE IF EXISTS scanlation_groups;
 DROP TABLE IF EXISTS vip_subscriptions;
 DROP TABLE IF EXISTS refresh_tokens;
 DROP TABLE IF EXISTS users;
-DROP TYPE IF EXISTS content_type;
+DROP TYPE IF EXISTS video_source_type;
+DROP TYPE IF EXISTS media_type;
+DROP TYPE IF EXISTS reading_direction;
 DROP TYPE IF EXISTS publication_status;
+DROP TYPE IF EXISTS content_format;
 DROP TYPE IF EXISTS tag_category;
 DROP TYPE IF EXISTS user_role;
 ```
 
 ---
 
-## 4. Exemplos de Queries Críticas em SQL Puro (`sqlc`)
+## 4. Queries de Alto Rendimento com `sqlc`
 
-### 4.1 Busca Booleana de Tags Estilo NHentai
+### 4.1 Busca Universal Filtrada por Formato e Tags
 ```sql
--- name: SearchMangasByTags :many
--- $1 = tag_ids obrigatórias (+tag1 AND +tag2)
--- $2 = tag_ids proibidas (-tag3)
-SELECT id, title, slug, cover_url, views_count, tag_ids
-FROM mangas
-WHERE is_published = TRUE 
-  AND is_dmca_blocked = FALSE
-  AND tag_ids @> $1::int[]           -- Contém todas as tags obrigatórias
-  AND NOT (tag_ids && $2::int[])     -- Não contém nenhuma das proibidas
-ORDER BY views_count DESC
-LIMIT $3 OFFSET $4;
+-- name: SearchMediaCatalog :many
+SELECT 
+    m.id, m.title, m.slug, m.format, m.reading_direction, 
+    m.is_gallery, m.cover_url, m.views_count, m.tag_ids
+FROM mangas m
+WHERE m.is_published = TRUE 
+  AND m.is_dmca_blocked = FALSE
+  AND ($1::content_format IS NULL OR m.format = $1)
+  AND ($2::int[] IS NULL OR m.tag_ids @> $2::int[])       -- Contém todas as tags obrigatórias
+  AND ($3::int[] IS NULL OR NOT (m.tag_ids && $3::int[])) -- Não contém nenhuma das proibidas
+ORDER BY m.views_count DESC
+LIMIT $4 OFFSET $5;
 ```
 
-### 4.2 Recuperação de Árvore de Comentários em 1 Query
+### 4.2 Recuperação de Episódio com Múltiplas Fontes de Vídeo e Legendas
 ```sql
--- name: GetChapterCommentsTree :many
-SELECT c.id, c.user_id, u.username, u.avatar_url, c.path, c.content, c.likes_count, c.created_at
-FROM comments c
-JOIN users u ON u.id = c.user_id
-WHERE c.chapter_id = $1 
-  AND c.is_deleted = FALSE
-ORDER BY c.path ASC;
-```
-
-### 4.3 Flush em Lote do Buffer de Visualizações (Redis -> Postgres)
-```sql
--- name: BatchIncrementMangaViews :exec
-UPDATE mangas
-SET views_count = views_count + data.inc_views
-FROM (SELECT unnest($1::uuid[]) AS manga_id, unnest($2::bigint[]) AS inc_views) AS data
-WHERE mangas.id = data.manga_id;
+-- name: GetEpisodeWithSources :many
+SELECT 
+    c.id AS chapter_id, c.chapter_number, c.title AS chapter_title,
+    s.id AS source_id, s.source_type, s.resolution, s.stream_url, s.server_name
+FROM chapters c
+LEFT JOIN episode_sources s ON s.chapter_id = c.id
+WHERE c.id = $1 
+  AND c.is_published = TRUE 
+  AND c.is_dmca_blocked = FALSE;
 ```
