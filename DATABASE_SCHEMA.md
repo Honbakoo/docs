@@ -743,6 +743,7 @@ CREATE TABLE mangas (
     -- MODO GALERIA / ONE-SHOT (Para doujinshis e galerias onde o leitor abre as páginas direto)
     is_gallery BOOLEAN NOT NULL DEFAULT FALSE,
     is_nsfw BOOLEAN NOT NULL DEFAULT TRUE,
+    is_vip_exclusive BOOLEAN NOT NULL DEFAULT FALSE,    -- Obra inteiramente exclusiva para assinantes VIP
     cover_url VARCHAR(512) NOT NULL,
     
     -- TAGS HIPER-OTIMIZADAS VIA ARRAY + ÍNDICE GIN
@@ -890,9 +891,11 @@ CREATE TABLE chapters (
     -- TIPO DE MÍDIA: 'image_pages' (mangá/galeria) OU 'video_stream' (anime)
     media_type media_type NOT NULL DEFAULT 'image_pages',
     
-    -- ACESSO ANTECIPADO / VIP
+    -- ACESSO ANTECIPADO / VIP / EXCLUSIVIDADE (ADR-0016)
     is_vip_early_access BOOLEAN NOT NULL DEFAULT FALSE,
-    available_public_at TIMESTAMPTZ,
+    is_vip_exclusive BOOLEAN NOT NULL DEFAULT FALSE,    -- Paywall permanente (ex: uncensored/premium)
+    available_public_at TIMESTAMPTZ,                    -- Liberação para usuários free se for early access
+    has_uncensored_version BOOLEAN NOT NULL DEFAULT FALSE,
     
     views_count BIGINT NOT NULL DEFAULT 0,
     is_published BOOLEAN NOT NULL DEFAULT TRUE,
@@ -951,7 +954,7 @@ CREATE TABLE media_objects (
     ready_at TIMESTAMPTZ,
     blocked_reason TEXT,
     blurhash VARCHAR(64),                   -- placeholder visual do frontend
-    variants JSONB NOT NULL DEFAULT '{}'::jsonb, -- ex.: {"thumb": {"key": "...", "width": 320}}
+    variants JSONB NOT NULL DEFAULT '{}'::jsonb, -- ex.: {"thumb": {"key": "...", "width": 320}, "original_raw": {"key": "...", "byte_size": 1204000}}
     is_restricted_vip BOOLEAN NOT NULL DEFAULT FALSE, -- Se true, armazenado em prefixo restrito com validação de assinatura
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_media_dimensions CHECK ((width IS NULL) = (height IS NULL))

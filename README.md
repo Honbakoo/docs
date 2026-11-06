@@ -66,6 +66,9 @@ O **Honbakoo** é uma engine de backend modular, headless e de altíssima perfor
   * P0 concluído, P1 com critérios de aceite e P2 com gatilhos.
 * 🧾 **[Retenção e LGPD (ADR-0015)](./adr/0015-retencao-lgpd-ciclo-de-vida.md)**:
   * Classes de dado, prazos, anonimização, DMCA e backup.
+* 💎 **[Modelo de Monetização VIP e Early Access (ADR-0016)](./adr/0016-modelo-vip-monetizacao-hentai-manga.md)**:
+  * Acesso antecipado temporal (Early Access) vs exclusividade permanente (Paywall seletivo/Uncensored).
+  * Vantagens QoL para apoiadores: download de capítulos em `.cbz` em 1 clique e resolução original lossless.
 
 ---
 
