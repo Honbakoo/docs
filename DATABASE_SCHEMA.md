@@ -589,6 +589,7 @@ CREATE TABLE users (
     -- Entitlement VIP denormalizado para leitura rápida; fonte de verdade: vip_subscriptions.
     vip_until TIMESTAMPTZ,
     is_banned BOOLEAN NOT NULL DEFAULT FALSE,
+    muted_until TIMESTAMPTZ,                -- Controle de mute temporário por moderação
     -- Soft-delete/LGPD: mantém integridade referencial e permite anonimização.
     deleted_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1142,7 +1143,7 @@ CREATE TABLE webhook_events (
 );
 CREATE INDEX idx_webhook_events_status ON webhook_events(status, received_at);
 
--- Fila de denúncias de conteúdo; moderação resolve com auditoria (ADR-0009).
+-- Fila de denúncias de conteúdo com roteamento inteligente para scanlators ou moderação global
 CREATE TABLE content_reports (
     id UUID PRIMARY KEY,
     reporter_id UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -1151,6 +1152,7 @@ CREATE TABLE content_reports (
     reason VARCHAR(64) NOT NULL,
     details TEXT,
     status report_status NOT NULL DEFAULT 'open',
+    assigned_group_id UUID REFERENCES scanlation_groups(id) ON DELETE SET NULL, -- Roteamento para a scanlator responsável
     resolution VARCHAR(32),                 -- 'removed', 'dismissed', 'warned', 'banned'
     resolution_note TEXT,
     resolved_by UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -1159,7 +1161,34 @@ CREATE TABLE content_reports (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX idx_content_reports_queue ON content_reports(status, created_at);
+CREATE INDEX idx_content_reports_assigned_group ON content_reports(assigned_group_id, status) WHERE assigned_group_id IS NOT NULL;
 CREATE INDEX idx_content_reports_target ON content_reports(target_type, target_id);
+
+-- Governança de tags: propostas da comunidade com aprovação moderada
+CREATE TABLE tag_proposals (
+    id UUID PRIMARY KEY,
+    manga_id UUID NOT NULL REFERENCES mangas(id) ON DELETE CASCADE,
+    tag_id INT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    proposed_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status VARCHAR(32) NOT NULL DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
+    reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_manga_tag_proposal UNIQUE (manga_id, tag_id, proposed_by)
+);
+CREATE INDEX idx_tag_proposals_pending ON tag_proposals(created_at ASC) WHERE status = 'pending';
+
+-- Histórico e auditoria de sanções aplicadas a usuários (warning, mute, ban)
+CREATE TABLE user_sanctions (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    moderator_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    sanction_type VARCHAR(32) NOT NULL,     -- 'warning', 'mute', 'uploader_suspension', 'permanent_ban'
+    reason TEXT NOT NULL,
+    expires_at TIMESTAMPTZ,                 -- NULL para punição permanente
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_user_sanctions_active ON user_sanctions(user_id, expires_at);
 
 -- Trilha de auditoria para ações administrativas e de ingestão.
 CREATE TABLE audit_log (
@@ -1177,6 +1206,8 @@ CREATE INDEX idx_audit_log_recent ON audit_log(created_at DESC);
 CREATE INDEX idx_audit_log_actor ON audit_log(actor_id, created_at DESC);
 
 -- +goose Down
+DROP TABLE IF EXISTS user_sanctions;
+DROP TABLE IF EXISTS tag_proposals;
 DROP TABLE IF EXISTS audit_log;
 DROP TABLE IF EXISTS content_reports;
 DROP TABLE IF EXISTS webhook_events;

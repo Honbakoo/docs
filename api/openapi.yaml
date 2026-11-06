@@ -512,6 +512,223 @@ paths:
                         items:
                           $ref: '#/components/schemas/UploadSlot'
 
+  /reports:
+    post:
+      summary: Criar Denúncia de Conteúdo (Capítulo, Mangá, Comentário ou Usuário)
+      security:
+        - BearerAuth: []
+      operationId: createReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_type, target_id, reason]
+              properties:
+                target_type:
+                  type: string
+                  enum: [chapter, manga, comment, user]
+                  example: chapter
+                target_id:
+                  type: string
+                  format: uuid
+                  example: 018d4610-b23c-7d4e-af5a-6b7c8d9e0f1a
+                reason:
+                  type: string
+                  enum: [missing_pages, wrong_order, corrupted_images, duplicate_chapter, bad_translation, spoiler_unmarked, harassment_hate, illegal_content, dmca_copyright, other]
+                  example: missing_pages
+                details:
+                  type: string
+                  maxLength: 1000
+                  example: Faltam as páginas 12 e 13 no meio do capítulo.
+      responses:
+        '201':
+          description: Denúncia registrada e encaminhada para a scanlator ou moderação
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      report_id:
+                        type: string
+                        format: uuid
+                      status:
+                        type: string
+                        example: open
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /users/me/library:
+    get:
+      summary: Listar Favoritos do Usuário Autenticado
+      security:
+        - BearerAuth: []
+      operationId: getUserFavorites
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 24
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Obras favoritadas pelo leitor
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MangaSummary'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /users/me/history:
+    get:
+      summary: Obter Histórico de Leitura do Usuário
+      security:
+        - BearerAuth: []
+      operationId: getReadingHistory
+      responses:
+        '200':
+          description: Histórico de capítulos lidos e progresso de vídeo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        manga_id:
+                          type: string
+                          format: uuid
+                        manga_title:
+                          type: string
+                        last_chapter_id:
+                          type: string
+                          format: uuid
+                        last_chapter_number:
+                          type: number
+                        last_page:
+                          type: integer
+                        last_video_position_seconds:
+                          type: integer
+                        updated_at:
+                          type: string
+                          format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      summary: Atualizar Progresso de Leitura/Vídeo
+      security:
+        - BearerAuth: []
+      operationId: updateReadingProgress
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [manga_id, chapter_id]
+              properties:
+                manga_id:
+                  type: string
+                  format: uuid
+                chapter_id:
+                  type: string
+                  format: uuid
+                page_number:
+                  type: integer
+                  minimum: 1
+                  default: 1
+                video_position_seconds:
+                  type: integer
+                  minimum: 0
+                  default: 0
+      responses:
+        '200':
+          description: Progresso salvo com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /tags/proposals:
+    post:
+      summary: Sugerir Tag para uma Obra (Governança Comunitária)
+      security:
+        - BearerAuth: []
+      operationId: proposeTag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [manga_id, tag_id]
+              properties:
+                manga_id:
+                  type: string
+                  format: uuid
+                tag_id:
+                  type: integer
+      responses:
+        '201':
+          description: Proposta de tag enviada para moderação
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      proposal_id:
+                        type: string
+                        format: uuid
+                      status:
+                        type: string
+                        example: pending
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
 components:
   securitySchemes:
     BearerAuth:
