@@ -22,10 +22,12 @@
    * Vetor de tags `tag_ids INT[]` com índice GIN para resolução de filtros booleanos (`+tag1 -tag2 artist:shindol language:pt`) em menos de 2ms.
 5. **Comunidade Hierárquica em Árvore com LTree:**
    * Comentários aninhados infinitos recuperados em uma única query rápida.
+6. **Métricas Temporais sem Overhead:**
+   * Views agregadas em períodos (`views_all_time`, `views_monthly`, `views_weekly`, `views_daily`) atualizadas periodicamente via batch flush do Redis.
 
 ---
 
-## 2. Diagrama de Relacionamento de Entidades (ERD Universal)
+## 2. Diagrama de Relacionamento de Entidades (ERD Completo com Tipos)
 
 ```mermaid
 erDiagram
@@ -33,57 +35,212 @@ erDiagram
     USERS ||--o{ USER_FAVORITES : saves
     USERS ||--o{ READING_HISTORY : tracks
     USERS ||--o{ COMMENTS : writes
+    USERS ||--o{ COMMENT_REACTIONS : reacts
     USERS ||--o{ VIP_SUBSCRIPTIONS : owns
     USERS ||--o{ SCANLATION_MEMBERS : participates
 
     SCANLATION_GROUPS ||--o{ SCANLATION_MEMBERS : contains
     SCANLATION_GROUPS ||--o{ CHAPTERS : releases
 
-    TAGS ||--o{ MANGAS : classified_in
+    TAGS ||--o{ MANGAS : "tag_ids GIN indexed"
     MANGAS ||--o{ CHAPTERS : contains
+    MANGAS ||--o{ USER_FAVORITES : favorited_in
+    MANGAS ||--o{ READING_HISTORY : tracked_in
     
     CHAPTERS ||--o{ CHAPTER_PAGES : has_pages
     CHAPTERS ||--o{ EPISODE_SOURCES : has_videos
     CHAPTERS ||--o{ EPISODE_SUBTITLES : has_subtitles
     CHAPTERS ||--o{ COMMENTS : receives
+    CHAPTERS ||--o{ READING_HISTORY : last_read_in
     
     MEDIA_OBJECTS ||--o{ CHAPTER_PAGES : references
-    MEDIA_OBJECTS ||--o{ EPISODE_SUBTITLES : references
+    COMMENTS ||--o{ COMMENT_REACTIONS : receives
+
+    USERS {
+        uuid id PK "UUIDv7"
+        varchar username UK "32 chars"
+        varchar email UK "255 chars"
+        varchar password_hash "Argon2id"
+        user_role role "guest, user, vip, moderator, admin"
+        varchar avatar_url "512 chars"
+        boolean is_banned "default false"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    REFRESH_TOKENS {
+        uuid id PK "UUIDv7"
+        uuid user_id FK
+        varchar token_hash UK "SHA-256 (64 chars)"
+        inet ip_address
+        text user_agent
+        timestamptz expires_at
+        timestamptz created_at
+    }
+
+    VIP_SUBSCRIPTIONS {
+        uuid id PK "UUIDv7"
+        uuid user_id FK
+        varchar provider "stripe, pix, crypto"
+        varchar external_id "gateway transaction id"
+        varchar status "active, canceled, past_due"
+        timestamptz starts_at
+        timestamptz expires_at
+        timestamptz created_at
+    }
+
+    SCANLATION_GROUPS {
+        uuid id PK "UUIDv7"
+        varchar name "128 chars"
+        varchar slug UK "128 chars"
+        text description
+        varchar website_url "255 chars"
+        varchar discord_url "255 chars"
+        timestamptz created_at
+    }
+
+    SCANLATION_MEMBERS {
+        uuid group_id PK,FK
+        uuid user_id PK,FK
+        varchar role "leader, translator, editor, cleaner"
+        timestamptz created_at
+    }
+
+    TAGS {
+        serial id PK "int4"
+        varchar name "64 chars"
+        varchar slug UK "64 chars"
+        tag_category category "general, artist, circle, parody, character, language"
+        text description
+        integer usage_count "denormalized for sorting"
+        timestamptz created_at
+    }
 
     MANGAS {
-        uuid id PK
-        string title
-        string slug UK
-        string content_format
-        string reading_direction
-        int[] tag_ids
-        bigint views_count
-        boolean is_gallery
+        uuid id PK "UUIDv7"
+        varchar title "255 chars"
+        text_array alt_titles "alternative names"
+        varchar slug UK "255 chars"
+        text description
+        content_format format "manga, manhwa, manhua, doujinshi, anime_h, anime_m"
+        publication_status status "ongoing, completed, hiatus, cancelled"
+        reading_direction reading_direction "right_to_left, left_to_right, vertical_scroll"
+        boolean is_gallery "true for one-shots/doujinshis"
+        boolean is_nsfw "adult content flag"
+        varchar cover_url "512 chars"
+        int_array tag_ids "GIN indexed array of tag IDs"
+        bigint views_all_time "total view count"
+        bigint views_monthly "monthly views (resettable)"
+        bigint views_weekly "weekly views (resettable)"
+        bigint views_daily "daily views (resettable)"
+        integer favorites_count "denormalized favorites"
+        numeric rating_score "0.00 to 10.00"
+        integer rating_count "number of ratings"
+        boolean is_published "visibility flag"
+        boolean is_dmca_blocked "legal takedown flag"
+        timestamptz published_at
+        timestamptz created_at
+        timestamptz updated_at
     }
 
     CHAPTERS {
-        uuid id PK
+        uuid id PK "UUIDv7"
         uuid manga_id FK
-        uuid group_id FK
-        numeric chapter_number
-        string media_type
-        string language
-        boolean is_vip_early_access
+        uuid group_id FK "nullable for self/anon releases"
+        numeric chapter_number "numeric(7,2) e.g. 10.5"
+        varchar volume_number "nullable e.g. Vol. 1"
+        varchar title "nullable chapter/episode name"
+        varchar language "language code e.g. pt-br, en"
+        media_type media_type "image_pages or video_stream"
+        boolean is_vip_early_access "early release lock"
+        timestamptz available_public_at "unlock time for free users"
+        bigint views_count "chapter view counter"
+        boolean is_published "visibility flag"
+        boolean is_dmca_blocked "legal takedown flag"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    MEDIA_OBJECTS {
+        uuid id PK "UUIDv7"
+        char sha256_hash UK "64 hex chars (CAS deduplication)"
+        varchar storage_path "512 chars (relative path/key)"
+        integer byte_size "file size in bytes"
+        integer width "image width in px"
+        integer height "image height in px"
+        varchar mime_type "image/webp, video/mp4"
+        timestamptz created_at
+    }
+
+    CHAPTER_PAGES {
+        uuid id PK "UUIDv7"
+        uuid chapter_id FK
+        uuid media_id FK
+        integer page_number "1-indexed page ordering"
+        timestamptz created_at
     }
 
     EPISODE_SOURCES {
-        uuid id PK
+        uuid id PK "UUIDv7"
         uuid chapter_id FK
-        string source_type
-        string resolution
-        string stream_url
+        video_source_type source_type "direct_hls, direct_mp4, external_embed"
+        varchar resolution "1080p, 720p, 480p, auto"
+        varchar stream_url "1024 chars"
+        varchar server_name "64 chars (e.g. Streamtape, Local)"
+        timestamptz created_at
     }
 
     EPISODE_SUBTITLES {
-        uuid id PK
+        uuid id PK "UUIDv7"
         uuid chapter_id FK
-        string language
-        string subtitle_url
+        varchar language "e.g. pt-br, en, ja"
+        varchar label "e.g. Português"
+        varchar subtitle_url "1024 chars (WebVTT .vtt)"
+        boolean is_default "primary subtitle flag"
+        timestamptz created_at
+    }
+
+    COMMENTS {
+        uuid id PK "UUIDv7"
+        uuid user_id FK
+        uuid chapter_id FK
+        ltree path "hierarchical tree path e.g. root.c1.c2"
+        text content "comment body"
+        integer likes_count "positive reactions count"
+        integer dislikes_count "negative reactions count"
+        boolean is_deleted "soft delete flag"
+        boolean is_flagged "reported to moderators"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    COMMENT_REACTIONS {
+        uuid user_id PK,FK
+        uuid comment_id PK,FK
+        boolean is_like "true for like, false for dislike"
+        timestamptz created_at
+    }
+
+    USER_FAVORITES {
+        uuid user_id PK,FK
+        uuid manga_id PK,FK
+        timestamptz created_at
+    }
+
+    READING_HISTORY {
+        uuid user_id PK,FK
+        uuid manga_id PK,FK
+        uuid last_chapter_id FK
+        integer last_page "last read page number"
+        integer last_video_position_seconds "video playback position in seconds"
+        timestamptz updated_at
+    }
+
+    BLOCKED_MEDIA_HASHES {
+        char sha256_hash PK "64 hex chars"
+        text reason "DMCA notice or illegal content justification"
+        uuid blocked_by FK "admin user ID"
+        timestamptz created_at
     }
 ```
 
@@ -115,7 +272,7 @@ CREATE TYPE video_source_type AS ENUM ('direct_hls', 'direct_mp4', 'external_emb
 -- 2. USUÁRIOS, AUTENTICAÇÃO E VIP
 -- ============================================================================
 CREATE TABLE users (
-    id UUID PRIMARY KEY,                    -- UUIDv7
+    id UUID PRIMARY KEY,                    -- UUIDv7 gerado na aplicação
     username VARCHAR(32) NOT NULL UNIQUE,
     email VARCHAR(255) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,    -- Argon2id
@@ -165,7 +322,7 @@ CREATE TABLE scanlation_groups (
 CREATE TABLE scanlation_members (
     group_id UUID NOT NULL REFERENCES scanlation_groups(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    role VARCHAR(32) NOT NULL DEFAULT 'member', -- 'leader', 'translator', 'editor'
+    role VARCHAR(32) NOT NULL DEFAULT 'member', -- 'leader', 'translator', 'editor', 'cleaner'
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (group_id, user_id)
 );
@@ -207,9 +364,15 @@ CREATE TABLE mangas (
     -- TAGS HIPER-OTIMIZADAS VIA ARRAY + ÍNDICE GIN
     tag_ids INT[] NOT NULL DEFAULT '{}',
     
-    -- CONTADORES ATÔMICOS (FLUSHED PERIODICAMENTE DO REDIS)
-    views_count BIGINT NOT NULL DEFAULT 0,
+    -- CONTADORES ATÔMICOS TEMPORAIS (FLUSHED PERIODICAMENTE DO REDIS EM BATCH)
+    views_all_time BIGINT NOT NULL DEFAULT 0,
+    views_monthly BIGINT NOT NULL DEFAULT 0,
+    views_weekly BIGINT NOT NULL DEFAULT 0,
+    views_daily BIGINT NOT NULL DEFAULT 0,
+    
     favorites_count INT NOT NULL DEFAULT 0,
+    rating_score NUMERIC(3, 2) NOT NULL DEFAULT 0.00, -- 0.00 até 10.00
+    rating_count INT NOT NULL DEFAULT 0,
     
     -- MODERAÇÃO E STATUS
     is_published BOOLEAN NOT NULL DEFAULT TRUE,
@@ -224,7 +387,8 @@ CREATE TABLE mangas (
 CREATE INDEX idx_mangas_tag_ids ON mangas USING GIN (tag_ids);
 CREATE INDEX idx_mangas_title_trgm ON mangas USING GIN (title gin_trgm_ops);
 CREATE INDEX idx_mangas_format ON mangas(format) WHERE is_published = TRUE AND is_dmca_blocked = FALSE;
-CREATE INDEX idx_mangas_views ON mangas(views_count DESC) WHERE is_published = TRUE AND is_dmca_blocked = FALSE;
+CREATE INDEX idx_mangas_views_all_time ON mangas(views_all_time DESC) WHERE is_published = TRUE AND is_dmca_blocked = FALSE;
+CREATE INDEX idx_mangas_views_weekly ON mangas(views_weekly DESC) WHERE is_published = TRUE AND is_dmca_blocked = FALSE;
 CREATE INDEX idx_mangas_latest ON mangas(created_at DESC) WHERE is_published = TRUE AND is_dmca_blocked = FALSE;
 
 -- ============================================================================
@@ -317,18 +481,19 @@ CREATE TABLE episode_subtitles (
 CREATE INDEX idx_episode_subtitles_chapter ON episode_subtitles(chapter_id);
 
 -- ============================================================================
--- 9. COMUNIDADE: COMENTÁRIOS COM LTREE (ÁRVORE HIERÁRQUICA)
+-- 9. COMUNIDADE: COMENTÁRIOS E REAÇÕES
 -- ============================================================================
 CREATE TABLE comments (
     id UUID PRIMARY KEY,                    -- UUIDv7
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     chapter_id UUID NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
     
-    -- Hierarquia indexada LTree (ex: 'root.commentA.replyB')
+    -- Hierarquia indexada LTree (ex: 'root.c1.c2')
     path LTREE NOT NULL,
     content TEXT NOT NULL,
     
     likes_count INT NOT NULL DEFAULT 0,
+    dislikes_count INT NOT NULL DEFAULT 0,
     is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
     is_flagged BOOLEAN NOT NULL DEFAULT FALSE,
     
@@ -337,6 +502,14 @@ CREATE TABLE comments (
 );
 CREATE INDEX idx_comments_path ON comments USING GIST (path);
 CREATE INDEX idx_comments_chapter ON comments(chapter_id, created_at DESC);
+
+CREATE TABLE comment_reactions (
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    comment_id UUID NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+    is_like BOOLEAN NOT NULL,               -- true = like, false = dislike
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, comment_id)
+);
 
 -- ============================================================================
 -- 10. HISTÓRICO, FAVORITOS E MODERAÇÃO DMCA
@@ -369,6 +542,7 @@ CREATE TABLE blocked_media_hashes (
 DROP TABLE IF EXISTS blocked_media_hashes;
 DROP TABLE IF EXISTS reading_history;
 DROP TABLE IF EXISTS user_favorites;
+DROP TABLE IF EXISTS comment_reactions;
 DROP TABLE IF EXISTS comments;
 DROP TABLE IF EXISTS episode_subtitles;
 DROP TABLE IF EXISTS episode_sources;
@@ -393,33 +567,54 @@ DROP TYPE IF EXISTS user_role;
 
 ---
 
-## 4. Queries de Alto Rendimento com `sqlc`
+## 4. Queries Críticas e Índices Otimizados para `sqlc`
 
-### 4.1 Busca Universal Filtrada por Formato e Tags
+### 4.1 Busca Universal Filtrada por Formato, Tags e Ordenação Temporal
 ```sql
 -- name: SearchMediaCatalog :many
 SELECT 
     m.id, m.title, m.slug, m.format, m.reading_direction, 
-    m.is_gallery, m.cover_url, m.views_count, m.tag_ids
+    m.is_gallery, m.cover_url, m.views_all_time, m.views_weekly, m.tag_ids,
+    m.rating_score
 FROM mangas m
 WHERE m.is_published = TRUE 
   AND m.is_dmca_blocked = FALSE
   AND ($1::content_format IS NULL OR m.format = $1)
   AND ($2::int[] IS NULL OR m.tag_ids @> $2::int[])       -- Contém todas as tags obrigatórias
   AND ($3::int[] IS NULL OR NOT (m.tag_ids && $3::int[])) -- Não contém nenhuma das proibidas
-ORDER BY m.views_count DESC
-LIMIT $4 OFFSET $5;
+ORDER BY 
+    CASE WHEN $4 = 'trending' THEN m.views_weekly END DESC,
+    CASE WHEN $4 = 'popular' THEN m.views_all_time END DESC,
+    CASE WHEN $4 = 'rating' THEN m.rating_score END DESC,
+    m.created_at DESC
+LIMIT $5 OFFSET $6;
 ```
 
-### 4.2 Recuperação de Episódio com Múltiplas Fontes de Vídeo e Legendas
+### 4.2 Recuperação Atômica de Capítulos com Páginas e Metadados de Imagem
 ```sql
--- name: GetEpisodeWithSources :many
+-- name: GetChapterPages :many
 SELECT 
-    c.id AS chapter_id, c.chapter_number, c.title AS chapter_title,
-    s.id AS source_id, s.source_type, s.resolution, s.stream_url, s.server_name
-FROM chapters c
-LEFT JOIN episode_sources s ON s.chapter_id = c.id
-WHERE c.id = $1 
-  AND c.is_published = TRUE 
-  AND c.is_dmca_blocked = FALSE;
+    cp.page_number,
+    mo.storage_path,
+    mo.byte_size,
+    mo.width,
+    mo.height,
+    mo.mime_type
+FROM chapter_pages cp
+JOIN media_objects mo ON mo.id = cp.media_id
+WHERE cp.chapter_id = $1
+ORDER BY cp.page_number ASC;
+```
+
+### 4.3 Flush em Lote de Visualizações Periódicas (Redis -> Postgres)
+```sql
+-- name: BatchFlushMangaViews :exec
+UPDATE mangas
+SET 
+    views_all_time = views_all_time + data.inc_views,
+    views_monthly  = views_monthly + data.inc_views,
+    views_weekly   = views_weekly + data.inc_views,
+    views_daily    = views_daily + data.inc_views
+FROM (SELECT unnest($1::uuid[]) AS manga_id, unnest($2::bigint[]) AS inc_views) AS data
+WHERE mangas.id = data.manga_id;
 ```
