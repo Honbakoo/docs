@@ -43,6 +43,12 @@ O **Honbakoo** é uma engine de backend modular, headless e de altíssima perfor
   * Procedimentos passo a passo para resolução de incidentes.
   * Esgotamento de disco, database locks e falha de Redis.
   * Takedowns DMCA em < 5 minutos e rotação emergencial de segredos.
+* 🛡️ **[Governança de Conteúdo, Moderação e Suporte (CONTENT_GOVERNANCE_AND_SUPPORT.md)](./CONTENT_GOVERNANCE_AND_SUPPORT.md)**:
+  * Máquina de estados de publicação (`draft`, `pending_review`, `published`, `rejected`).
+  * Governança de tags com propostas e aliases contra duplicidades.
+  * Tombstone pattern para moderação de comentários preservando árvores de respostas.
+  * Sistema de denúncias e tickets de suporte com roteamento direto para scanlators.
+  * Auditoria de sanções (warn, mute temporário e ban).
 * 🔌 **[Pipeline de Ingestão e Conectores (INGESTION_PIPELINE.md)](./INGESTION_PIPELINE.md)**:
   * Arquitetura de scrapers desacoplados em sandbox (Wasm/Python).
   * Fila com retentativas exponenciais e Dead Letter Queue (DLQ).
