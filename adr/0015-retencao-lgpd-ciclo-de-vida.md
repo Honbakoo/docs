@@ -47,7 +47,7 @@ O sistema guarda dados pessoais (e-mail, IP, user agent, histórico de leitura),
 | Logs de aplicação | 30 dias | sem corpo, token ou e-mail completo |
 | Backups | 7 diários + 4 semanais | restore testado mensalmente |
 
-1. `DELETE /users/me` é soft-delete imediato; a anonimização roda em job e é idempotente.
+1. `DELETE /api/v1/auth/me` é soft-delete imediato; a anonimização roda em job e é idempotente.
 2. Exportação LGPD é um job assíncrono que gera JSON com dados do usuário, sem segredos.
 3. DMCA bloqueia `is_dmca_blocked` de forma síncrona e blacklista hashes de forma assíncrona.
 4. Nenhum job apaga mídia sem recalcular `ref_count` e verificar `blocked_media_hashes`.

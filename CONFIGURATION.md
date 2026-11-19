@@ -1,227 +1,229 @@
 # ⚙️ Honbakoo Configuration Specification (Self-Hosted Architecture)
 
-> **Inspiração:** Modelos consagrados de self-hosted de alta escala (**Gitea/Forgejo** e **Supabase**), adaptados para máxima leveza e zero atrito de instalação.  
-> **Filosofia:** *"Convention over Configuration"* — a plataforma sobe 100% funcional com defaults inteligentes ("Zero-Config"), mas oferece controle cirúrgico para administradores avançados.
+> **Inspiração:** Modelos consagrados de self-hosted de alta escala (**Gitea/Forgejo** e **Supabase**), adaptados para máxima leveza e zero atrito de instalação.
+> **Filosofia:** _"Convention over Configuration"_ — a plataforma sobe 100% funcional com defaults inteligentes ("Zero-Config"), mas oferece controle cirúrgico para administradores avançados.
 
 ---
 
-## 1. A Hierarquia das 3 Camadas de Configuração
-
-Para evitar os erros do GitLab (arquivos de configuração gigantes de 2.000 linhas) e do Ghost (necessidade de restart para qualquer ajuste de texto), o Honbakoo implementa uma **Hierarquia em 3 Camadas**:
+## 1. Hierarquia de Configuração
 
 ```mermaid
 flowchart TD
-    C1["Camada 1: Defaults Embutidos no Código Go (Hardcoded Sanity Defaults)"]
-    C2["Camada 2: Arquivo .env / config.yaml & Variáveis de Ambiente (Infraestrutura Estática)"]
-    C3["Camada 3: Tabela system_settings no PostgreSQL (Configurações Dinâmicas / Hot-Reload)"]
+    C1["Camada 1: Defaults embutidos no código Go"]
+    C2["Camada 2: .env e variáveis de ambiente do processo"]
+    C3["Camada 3: system_settings no PostgreSQL (reservada)"]
 
-    C1 -->|Sobrescrito por| C2
-    C2 -->|Sobrescrito por| C3
-    C3 --> FinalConfig["Configuração Efetiva em Runtime"]
+    C1 -->|sobrescrito por| C2
+    C2 -.->|previsto| C3
 ```
 
-1. **Camada 1 (Defaults Embutidos):** Valores seguros definidos no código Go. Se nenhum arquivo ou variável for fornecido, a aplicação sobe ouvindo na porta `8080`, com storage local e limites padrões de segurança.
-2. **Camada 2 (Ambiente & Infraestrutura Estática):** Conexão do banco de dados, chaves criptográficas JWT, endpoints de S3 e portas de rede. Gerenciado via `.env` ou variáveis de contêiner. Exige reinício do processo em caso de alteração.
-3. **Camada 3 (Tabela de Banco Dinâmica com Hot-Reload):** Nome do site, se aceita novos registros, banners de aviso, limites de upload por leitor e ativação de módulos (anime, doujinshi). Pode ser alterado em tempo real via Painel Administrativo sem reiniciar o servidor.
+1. **Camada 1 — Defaults embutidos.** Valores seguros em `internal/config/config.go`. Sem nenhum arquivo ou variável, a API sobe na porta `8080`, com storage local e políticas conservadoras.
+2. **Camada 2 — Ambiente.** `.env` (lido do diretório de trabalho, sem sobrescrever variáveis já definidas) ou variáveis do contêiner. Alterações exigem restart.
+3. **Camada 3 — `system_settings`.** A tabela e as queries existem no schema, mas **ainda não há endpoint nem hot-reload ligado a ela**. Toda configuração efetiva hoje vem da Camada 2. Não documente nem dependa de hot-reload até a Camada 3 ser implementada.
+
+A validação é **fail-closed**: `config.Validate()` roda no boot e derruba o processo com configuração inválida. Em `HONBAKOO__ENV=production` há checagens adicionais de segredos.
 
 ---
 
-## 2. Convenção de Nomenclatura de Variáveis (Padrão Gitea / 12-Factor)
-
-Todas as variáveis de ambiente seguem o padrão estruturado com prefixo `HONBAKOO__` e separador duplo de subseção `__`:
+## 2. Convenção de Nomenclatura
 
 ```text
-HONBAKOO__<SEÇÃO>__<CHAVE>=<VALOR>
+HONBAKOO__<SEÇÃO>__<CHAVE>=<valor>
 ```
 
-Isso permite mapear diretamente estruturas de configuração complexas (YAML/JSON) para variáveis de ambiente no Docker ou Kubernetes sem ambiguidade.
+- Prefixo obrigatório `HONBAKOO__`.
+- Separador de seção `__` (dois underscores).
+- Nomes em `SCREAMING_SNAKE_CASE`.
+- Durações usam a sintaxe de `time.ParseDuration` (`5s`, `15m`, `720h`).
+- Booleanos aceitam `true/false`, `1/0`, `yes/no`, `on/off`.
+
+Arquivo de referência pronto para copiar: [`engine/.env.example`](https://github.com/Honbakoo/engine/blob/main/.env.example).
 
 ---
 
-## 3. Matriz Completa de Configuração de Infraestrutura (Camada 2)
+## 3. Matriz Completa de Configuração
 
-### 3.1 Servidor & Rede (`HONBAKOO__SERVER__*`)
+### 3.1 Ambiente e Servidor (`HONBAKOO__ENV`, `HONBAKOO__SERVER__*`)
 
 | Variável | Tipo | Padrão | Descrição |
 | :--- | :--- | :--- | :--- |
-| `HONBAKOO__SERVER__PORT` | int | `8080` | Porta TCP onde a API escuta. |
-| `HONBAKOO__SERVER__HOST` | string | `0.0.0.0` | Endereço de bind de rede. |
-| `HONBAKOO__SERVER__READ_TIMEOUT` | duration | `10s` | Timeout de leitura de requisição HTTP (anti-Slowloris). |
-| `HONBAKOO__SERVER__WRITE_TIMEOUT`| duration | `15s` | Timeout de resposta HTTP (anti-connection leak). |
-| `HONBAKOO__SERVER__PUBLIC_URL` | string | `http://localhost:8080` | URL pública canônica (usada em links e manifestos). |
-| `HONBAKOO__SERVER__TRUSTED_PROXIES`| string | `127.0.0.1/32,10.0.0.0/8` | CIDRs confiáveis para leitura de cabeçalhos de IP (`CF-Connecting-IP`, `X-Forwarded-For`). |
+| `HONBAKOO__ENV` | string | `production` | `production`, `development` ou `test`. Em produção a inicialização exige segredos fortes, banco não-padrão e `PUBLIC_URL` HTTPS. |
+| `HONBAKOO__SERVER__HOST` | string | `0.0.0.0` | Endereço de bind. |
+| `HONBAKOO__SERVER__PORT` | int | `8080` | Porta TCP (1–65535). |
+| `HONBAKOO__SERVER__PUBLIC_URL` | string | `http://localhost:8080` | URL pública canônica da API. Usada em CORS, links de e-mail e URLs de mídia local (`/uploads`). Precisa ser `https` em produção. Não é usada como base do S3. |
+| `HONBAKOO__SERVER__CORS_ORIGINS` | CSV | `""` | Origens exatas permitidas (esquema + host + porta, sem path). Vazio usa `http://localhost:3000`, `http://localhost:8080` e `PUBLIC_URL`. Nunca use `*` com credenciais. |
+| `HONBAKOO__SERVER__READ_HEADER_TIMEOUT` | duration | `5s` | Timeout de leitura dos headers (anti-Slowloris). |
+| `HONBAKOO__SERVER__READ_TIMEOUT` | duration | `5m` | Timeout de leitura da requisição. |
+| `HONBAKOO__SERVER__WRITE_TIMEOUT` | duration | `5m` | Timeout de escrita da resposta; precisa acomodar downloads de CBZ grandes. |
+| `HONBAKOO__SERVER__TRUSTED_PROXIES` | string | `127.0.0.1/32,10.0.0.0/8` | CIDRs confiáveis para `X-Forwarded-For`/`CF-Connecting-IP`. |
+| `HONBAKOO__SERVER__PROFILE` | string | `budget` | `budget` ou `scale`. Hoje é informativo (telemetria/config público): storage vem de `STORAGE__BACKEND` e a fila é sempre PostgreSQL. Réplicas da API são stateless. |
+| `HONBAKOO__SERVER__READ_ONLY` | bool | `false` | Modo manutenção: bloqueia toda escrita, exceto login/refresh/logout/recuperação de senha/verificação de e-mail/`/auth/me`/webhook de billing. |
+
+### Seed de desenvolvimento
+
+| Variável | Tipo | Padrão | Descrição |
+| :--- | :--- | :--- | :--- |
+| `HONBAKOO__AUTO_SEED` | bool | `false` | Executa o seed no startup. Só tem efeito em `development`/`test` para o catálogo demo. Nunca habilite em produção. |
+| `HONBAKOO__SEED__ADMIN_USERNAME` | string | `admin` | Username do admin inicial. |
+| `HONBAKOO__SEED__ADMIN_EMAIL` | string | `admin@honbakoo.org` | E-mail do admin inicial. |
+| `HONBAKOO__SEED__ADMIN_PASSWORD` | string | vazio | Em dev, vazio usa `HonbakooAdmin!2026`; em produção, vazio gera senha aleatória e a registra no log apenas na criação. |
+
+Personas demo (senha `HonbakooDemo!2026`): `reader@honbakoo.test`, `verified@honbakoo.test`, `vip@honbakoo.test`, `banned@honbakoo.test`.
 
 ### 3.2 Banco de Dados (`HONBAKOO__DATABASE__*`)
 
 | Variável | Tipo | Padrão | Descrição |
 | :--- | :--- | :--- | :--- |
-| `HONBAKOO__DATABASE__URL` | string | *(obrigatório)* | String de conexão PostgreSQL (`postgres://user:pass@host:5432/db?sslmode=disable`). |
-| `HONBAKOO__DATABASE__MAX_OPEN_CONNS`| int | `25` (budget) / `50` (scale) | Limite máximo de conexões abertas no pool `pgx`. |
-| `HONBAKOO__DATABASE__MIN_IDLE_CONNS`| int | `5` | Conexões mantidas ociosas e prontas para uso. |
-| `HONBAKOO__DATABASE__MAX_CONN_LIFETIME`| duration | `30m` | Tempo máximo de vida de uma conexão TCP antes da reciclagem. |
+| `HONBAKOO__DATABASE__URL` | string | `postgres://honbakoo_user:honbakoo_password@localhost:5432/honbakoo_db?sslmode=disable` | String de conexão PostgreSQL 16+. Em produção o valor padrão é rejeitado. |
+| `HONBAKOO__DATABASE__MAX_OPEN_CONNS` | int | `25` | Máximo de conexões abertas no pool `pgx`. |
+| `HONBAKOO__DATABASE__MIN_IDLE_CONNS` | int | `5` | Conexões ociosas mantidas. |
+| `HONBAKOO__DATABASE__CONN_MAX_LIFETIME` | duration | `1h` | Tempo máximo de vida de uma conexão. |
+| `HONBAKOO__DATABASE__CONN_MAX_IDLE_TIME` | duration | `30m` | Tempo máximo de ociosidade. |
 
-### 3.3 Armazenamento de Mídia (`HONBAKOO__STORAGE__*`)
-
-| Variável | Tipo | Padrão | Descrição |
-| :--- | :--- | :--- | :--- |
-| `HONBAKOO__STORAGE__DRIVER` | string | `local` | Provedor de storage: `local` ou `s3`. |
-| `HONBAKOO__STORAGE__LOCAL_PATH` | string | `./data/media` | Diretório no disco local se `DRIVER=local`. |
-| `HONBAKOO__STORAGE__S3_ENDPOINT`| string | `""` | Endpoint S3 (ex: `https://<id>.r2.cloudflarestorage.com`). |
-| `HONBAKOO__STORAGE__S3_BUCKET` | string | `honbakoo-media` | Nome do bucket. |
-| `HONBAKOO__STORAGE__S3_ACCESS_KEY`| string | `""` | Access Key ID do S3/R2/B2. |
-| `HONBAKOO__STORAGE__S3_SECRET_KEY`| string | `""` | Secret Access Key (mascarado nos logs). |
-| `HONBAKOO__STORAGE__S3_REGION` | string | `auto` | Região do bucket S3. |
-| `HONBAKOO__STORAGE__CDN_BASE_URL`| string | `""` | URL da CDN pública na frente do storage (ex: `https://cdn.site.com`). |
-| `HONBAKOO__STORAGE__MIRROR_URLS`| string | `""` | URLs de mirrors de backup separadas por vírgula em caso de falha do CDN principal. |
-
-### 3.4 Autenticação & Segurança (`HONBAKOO__AUTH__*`)
+### 3.3 Autenticação e Políticas de Acesso (`HONBAKOO__AUTH__*`)
 
 | Variável | Tipo | Padrão | Descrição |
 | :--- | :--- | :--- | :--- |
-| `HONBAKOO__AUTH__JWT_SECRET` | string | *(gerado no init se vazio)* | Chave HMAC de 256 bits para assinatura de Access Tokens. |
-| `HONBAKOO__AUTH__JWT_EXPIRY` | duration | `15m` | Tempo de vida do Access Token em memória. |
-| `HONBAKOO__AUTH__REFRESH_TOKEN_EXPIRY`| duration | `30d` | Tempo de vida máximo do Refresh Token rotativo. |
-| `HONBAKOO__AUTH__REFRESH_PEPPER` | string | *(obrigatório)* | Pimenta criptográfica usada no hash do refresh token. |
-| `HONBAKOO__AUTH__ARGON2_MEMORY` | int | `65536` (64MB) | Memória alocada para hashing de senhas. |
-| `HONBAKOO__AUTH__ARGON2_TIME` | int | `3` | Número de iterações do algoritmo Argon2id. |
+| `HONBAKOO__AUTH__JWT_SECRET` | string | placeholder inseguro | Chave HMAC dos access tokens. Em produção: mínimo 32 bytes e diferente do placeholder (`openssl rand -base64 32`). |
+| `HONBAKOO__AUTH__ACCESS_TOKEN_TTL` | duration | `15m` | Validade do access token. |
+| `HONBAKOO__AUTH__REFRESH_TOKEN_TTL` | duration | `720h` | Validade do refresh token rotativo. Deve ser maior que o access TTL. |
+| `HONBAKOO__AUTH__AGE_VERIFICATION_MODE` | string | `self_declaration` | `disabled`, `self_declaration` ou `strict`. |
+| `HONBAKOO__AUTH__REGISTRATION_MODE` | string | `public` | `public` ou `disabled`. |
 
-### 3.5 Cache & Filas (`HONBAKOO__CACHE__*` e `HONBAKOO__QUEUE__*`)
+> Não existem variáveis de Argon2/pepper: os parâmetros de hash são fixos no código e o refresh token é opaco com hash no banco.
 
-| Variável | Tipo | Padrão | Descrição |
-| :--- | :--- | :--- | :--- |
-| `HONBAKOO__CACHE__DRIVER` | string | `memory` | Provedor de cache: `memory` (Ristretto) ou `redis`. |
-| `HONBAKOO__CACHE__REDIS_URL` | string | `""` | URL de conexão Redis (`redis://:pass@host:6379/0`). |
-| `HONBAKOO__QUEUE__DRIVER` | string | `postgres` (budget) / `redis` (scale) | Motor de fila de tarefas em background. |
-
-### 3.6 Limites & Proteção Defensiva (`HONBAKOO__LIMITS__*`)
+### 3.4 Conteúdo (`HONBAKOO__CONTENT__*`)
 
 | Variável | Tipo | Padrão | Descrição |
 | :--- | :--- | :--- | :--- |
-| `HONBAKOO__LIMITS__MEDIA_MAX_BYTES` | int | `5242880` (5MB) | Tamanho máximo por imagem individual. |
-| `HONBAKOO__LIMITS__MEDIA_MAX_PIXELS`| int | `50000000` (50 MP) | Teto máximo de resolução contra bombas de descompressão. |
-| `HONBAKOO__LIMITS__UPLOAD_MAX_CONCURRENCY`| int | `1` (budget) / `8` (scale) | Número de conversões WebP paralelas via `libvips`. |
+| `HONBAKOO__CONTENT__DOWNLOAD_MODE` | string | `vip_only` | `public`, `vip_only` ou `disabled`. `vip_only` exige billing habilitado. |
+| `HONBAKOO__CONTENT__CATALOG_MODE` | string | `hybrid` | `hybrid`, `sfw_only` ou `nsfw_only`. Aplicado no SQL de busca/listagem e também em `GET /mangas/{slug}` e no reader. |
+
+### 3.5 Editorial (`HONBAKOO__EDITORIAL__*`)
+
+| Variável | Tipo | Padrão | Descrição |
+| :--- | :--- | :--- | :--- |
+| `HONBAKOO__EDITORIAL__CREATION_POLICY` | string | `group_member` | `group_member`, `open` ou `admin_only`. |
+
+### 3.6 Comunidade (`HONBAKOO__COMMUNITY__*`)
+
+| Variável | Tipo | Padrão | Descrição |
+| :--- | :--- | :--- | :--- |
+| `HONBAKOO__COMMUNITY__COMMENTS_ENABLED` | bool | `true` | Liga/desliga comentários. |
+| `HONBAKOO__COMMUNITY__REPORTS_ENABLED` | bool | `true` | Liga/desliga denúncias. |
+
+### 3.7 Storage (`HONBAKOO__STORAGE__*`)
+
+| Variável | Tipo | Padrão | Descrição |
+| :--- | :--- | :--- | :--- |
+| `HONBAKOO__STORAGE__BACKEND` | string | `local` | `local` ou `s3`. |
+| `HONBAKOO__STORAGE__LOCAL_PATH` | string | `./uploads` | Diretório de mídia no disco (apenas `local`). |
+| `HONBAKOO__STORAGE__HOTLINK_PROTECTION` | bool | `false` | Ativa checagem de `Referer` em `/uploads` (deixe desligado atrás de CDN). |
+| `HONBAKOO__STORAGE__S3_ENDPOINT` | string | `""` | Host[:porta] do endpoint S3-compatível (R2, B2, MinIO, AWS), sem `https://`. Obrigatório com `BACKEND=s3`. |
+| `HONBAKOO__STORAGE__S3_REGION` | string | `auto` | Região do bucket. |
+| `HONBAKOO__STORAGE__S3_BUCKET` | string | `""` | Nome do bucket. Obrigatório com `BACKEND=s3`. |
+| `HONBAKOO__STORAGE__S3_ACCESS_KEY` | string | `""` | Access key. Obrigatória com `BACKEND=s3`. |
+| `HONBAKOO__STORAGE__S3_SECRET_KEY` | string | `""` | Secret key. Obrigatória com `BACKEND=s3`. |
+| `HONBAKOO__STORAGE__S3_USE_SSL` | bool | `true` | Usa HTTPS para falar com o endpoint. |
+| `HONBAKOO__STORAGE__S3_PUBLIC_URL` | string | `""` | Base pública/CDN do bucket usada nas URLs do reader. Obrigatória com `BACKEND=s3`; não use a URL da API. |
+
+> Com `BACKEND=s3`, o bucket é criado automaticamente se não existir e `/uploads` deixa de ser servido pela API; `PublicURL` é `S3_PUBLIC_URL` + chave do objeto. Não há variáveis `CDN_BASE_URL`/`MIRROR_URLS` implementadas.
+
+### 3.8 Billing (`HONBAKOO__BILLING__*`)
+
+| Variável | Tipo | Padrão | Descrição |
+| :--- | :--- | :--- | :--- |
+| `HONBAKOO__BILLING__ENABLED` | bool | `true` | Liga VIP/billing. |
+| `HONBAKOO__BILLING__WEBHOOK_SECRET` | string | placeholder inseguro | Segredo do webhook genérico. Em produção: mínimo 32 bytes e diferente do placeholder. |
+| `HONBAKOO__BILLING__STRIPE_WEBHOOK_SECRET` | string | `""` | Segredo de assinatura do Stripe (`whsec_...`), opcional. |
+
+### 3.9 E-mail transacional (`HONBAKOO__SMTP__*`)
+
+| Variável | Tipo | Padrão | Descrição |
+| :--- | :--- | :--- | :--- |
+| `HONBAKOO__SMTP__ENABLED` | bool | `false` | Quando falso, e-mails são apenas logados (sem corpo/token). |
+| `HONBAKOO__SMTP__HOST` | string | `""` | Host SMTP. Obrigatório quando habilitado. |
+| `HONBAKOO__SMTP__PORT` | int | `587` | Porta SMTP (1–65535) com STARTTLS obrigatório para AUTH; TLS mínimo 1.2. TLS implícito (465) não é suportado. |
+| `HONBAKOO__SMTP__USERNAME` | string | `""` | Usuário para `PLAIN AUTH` (opcional). Se definido, o servidor precisa anunciar STARTTLS e AUTH; credenciais nunca são enviadas em texto puro. |
+| `HONBAKOO__SMTP__PASSWORD` | string | `""` | Senha do usuário SMTP. |
+| `HONBAKOO__SMTP__FROM` | string | `no-reply@honbakoo.local` | Remetente; precisa conter `@`. |
+
+Os links enviados usam `HONBAKOO__SERVER__PUBLIC_URL`:
+- redefinição de senha: `.../reset-password?token=...` (1h);
+- verificação de e-mail: `.../verify-email?token=...` (24h).
+
+### 3.10 Observabilidade (`HONBAKOO__METRICS__*`, `HONBAKOO__LOG__*`)
+
+| Variável | Tipo | Padrão | Descrição |
+| :--- | :--- | :--- | :--- |
+| `HONBAKOO__METRICS__TOKEN` | string | `""` | Bearer token exigido por `/metrics` fora de dev/test. Vazio desabilita o endpoint nesses ambientes. |
+| `HONBAKOO__LOG__LEVEL` | string | `info` | `debug`, `info`, `warn` ou `error`. |
+| `HONBAKOO__LOG__FORMAT` | string | `json` | `json` ou `text`. |
+
+### 3.11 Variáveis que NÃO existem
+
+As seções abaixo apareciam em versões antigas desta especificação e **não são lidas pelo código**:
+
+- `HONBAKOO_PROFILE` (use `HONBAKOO__SERVER__PROFILE`);
+- `HONBAKOO__STORAGE__DRIVER` (use `...__BACKEND`);
+- `HONBAKOO__AUTH__JWT_EXPIRY` / `...__REFRESH_TOKEN_EXPIRY` (use `...__ACCESS_TOKEN_TTL` / `...__REFRESH_TOKEN_TTL`);
+- `HONBAKOO__AUTH__REFRESH_PEPPER`, `...__ARGON2_*`;
+- `HONBAKOO__CACHE__*`, `HONBAKOO__QUEUE__*`, `HONBAKOO__LIMITS__*`;
+- `HONBAKOO__STORAGE__CDN_BASE_URL`, `...__MIRROR_URLS`;
+- `HONBAKOO__FEATURES__ENABLE_AGE_VERIFICATION` (use `HONBAKOO__AUTH__AGE_VERIFICATION_MODE`).
 
 ---
 
-## 4. Tabela de Configurações Dinâmicas no Banco (`system_settings` - Camada 3)
+## 4. Configuração Dinâmica (`system_settings`)
 
-Configurações operacionais que podem ser alteradas em tempo real via Painel Administrativo ou chamada autenticada `PATCH /api/v1/admin/settings`:
-
-```sql
-CREATE TABLE system_settings (
-    key VARCHAR(64) PRIMARY KEY,
-    value JSONB NOT NULL,
-    description TEXT,
-    is_public BOOLEAN NOT NULL DEFAULT FALSE, -- Se true, é serializado em GET /api/v1/config para o frontend
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-```
-
-### Chaves Dinâmicas Suportadas de Fábrica:
-
-1. **`app.general` (`is_public = TRUE`):**
-   ```json
-   {
-     "site_name": "Honbakoo Reader",
-     "site_description": "O melhor leitor de mangás e doujinshis da comunidade",
-     "default_language": "pt-br",
-     "allow_registrations": true,
-     "maintenance_mode": false,
-     "announcement_banner": "Novo servidor de imagens ativo com velocidade 10x maior!"
-   }
-   ```
-2. **`features.modules` (`is_public = TRUE`):**
-   ```json
-   {
-     "enable_manga": true,
-     "enable_doujinshi": true,
-     "enable_webtoon": true,
-     "enable_anime_video": false,
-     "enable_age_verification": true
-   }
-   ```
-3. **`moderation.rules` (`is_public = FALSE`):**
-   ```json
-   {
-     "auto_quarantine_report_threshold": 5,
-     "daily_upload_limit_new_users": 3,
-     "comment_min_reputation_score": 0
-   }
-   ```
-4. **`vip.plans` (`is_public = TRUE`):**
-   ```json
-   {
-     "monthly_price_brl": 15.00,
-     "early_access_days": 7,
-     "enable_cbz_downloads": true
-   }
-   ```
+A tabela existe e as queries `GetSetting`, `ListPublicSettings` e `UpsertSetting` estão geradas, mas **não há serviço, endpoint `PATCH /admin/settings` ou hot-reload conectado**. Trate-a como reservada para trabalho futuro; qualquer mudança de comportamento hoje exige alterar a Camada 2 e reiniciar.
 
 ---
 
-## 5. Rota Pública de Configuração para Frontends (`GET /api/v1/config`)
+## 5. Rota Pública de Configuração (`GET /api/v1/config`)
 
-O frontend web ou app mobile não precisa adivinhar o que a instância suporta. Ele faz uma única requisição na inicialização:
+O frontend descobre o que a instância oferece numa única chamada (sem autenticação):
 
 ```http
 GET /api/v1/config
-Cache-Control: public, max-age=300
 ```
 
-**Resposta:**
 ```json
 {
-  "success": true,
-  "data": {
-    "site_name": "Honbakoo Reader",
-    "version": "1.0.0",
-    "modules": {
-      "manga": true,
-      "doujinshi": true,
-      "webtoon": true,
-      "anime_video": false
-    },
-    "features": {
-      "age_verification_required": true,
-      "registrations_open": true
-    },
-    "default_language": "pt-br",
-    "supported_languages": ["pt-br", "en", "es", "ja"]
-  }
+  "site_name": "Honbakoo",
+  "public_url": "https://honbakoo.example",
+  "profile": "budget",
+  "allow_registration": true,
+  "age_verification_mode": "self_declaration",
+  "billing_enabled": true,
+  "comments_enabled": true,
+  "reports_enabled": true,
+  "download_mode": "vip_only",
+  "catalog_mode": "hybrid",
+  "read_only": false
 }
 ```
 
+O contrato exato está em `engine/api/openapi.yaml` e é validado por `TestOpenAPIMatchesRouter`.
+
 ---
 
-## 6. O Arquivo `.env.example` Completo
+## 6. `.env.example` completo
+
+O arquivo canônico fica em [`engine/.env.example`](https://github.com/Honbakoo/engine/blob/main/.env.example) e contém todas as variáveis acima com comentários. Para começar:
+
+```bash
+cp .env.example .env
+# edite DATABASE__URL e gere os segredos:
+openssl rand -base64 32
+```
+
+Em produção, no mínimo:
 
 ```env
-# ==============================================================================
-# HONBAKOO ENGINE - CONFIGURAÇÃO BÁSICA
-# ==============================================================================
-
-# PERFIL: 'budget' (1 VPS, 512MB-1GB, tudo local) ou 'scale' (Nuvem, S3, Redis)
-HONBAKOO_PROFILE=budget
-
-# BANCO DE DADOS POSTGRESQL (OBRIGATÓRIO)
-HONBAKOO__DATABASE__URL=postgres://honbakoo:honbakoopass@localhost:5432/honbakoo?sslmode=disable
-
-# SEGREDOS CRIPTOGRÁFICOS (Gere com: openssl rand -base64 32)
-HONBAKOO__AUTH__JWT_SECRET=substitua_por_uma_chave_secreta_longa_e_aleatoria
-HONBAKOO__AUTH__REFRESH_PEPPER=substitua_por_outra_chave_secreta_longa
-
-# STORAGE: 'local' (usa pasta no disco) ou 's3' (Cloudflare R2 / Backblaze B2)
-HONBAKOO__STORAGE__DRIVER=local
-HONBAKOO__STORAGE__LOCAL_PATH=./data/media
-
-# DESCOMENTE SE FOR USAR S3 / CLOUDFLARE R2
-# HONBAKOO__STORAGE__DRIVER=s3
-# HONBAKOO__STORAGE__S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
-# HONBAKOO__STORAGE__S3_BUCKET=honbakoo-media
-# HONBAKOO__STORAGE__S3_ACCESS_KEY=sua_access_key
-# HONBAKOO__STORAGE__S3_SECRET_KEY=sua_secret_key
-# HONBAKOO__STORAGE__CDN_BASE_URL=https://cdn.meusite.org
-
-# CONFORMIDADE E AFERIÇÃO DE IDADE (ECA Digital Brasil)
-HONBAKOO__FEATURES__ENABLE_AGE_VERIFICATION=strict
+HONBAKOO__ENV=production
+HONBAKOO__DATABASE__URL=postgres://user:pass@host:5432/honbakoo?sslmode=require
+HONBAKOO__AUTH__JWT_SECRET=<32+ bytes aleatórios>
+HONBAKOO__BILLING__WEBHOOK_SECRET=<32+ bytes aleatórios>
+HONBAKOO__SERVER__PUBLIC_URL=https://honbakoo.example
 ```

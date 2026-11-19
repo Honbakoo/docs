@@ -11,7 +11,7 @@
 - Credenciais de usuário (senha, refresh token, token de verificação/reset).
 - API keys de ingestão e administração.
 - Conteúdo de mídia e metadados de obras.
-- Dados pessoais: e-mail, IP, user agent, histórico de leitura.
+- Dados pessoais: e-mail, IP, user agent, histórico de leitura e identificadores pseudonimizados de views.
 - Disponibilidade do catálogo e da API.
 
 ### Atores
@@ -27,10 +27,10 @@
 
 ### Fronteiras de confiança
 
-1. **Borda:** Cloudflare/Caddy → API. Cabeçalhos de proxy só são confiáveis quando vêm de `TRUSTED_PROXIES`.
+1. **Borda:** Cloudflare/Caddy → API. Cabeçalhos de proxy só são confiáveis quando vêm de `HONBAKOO__SERVER__TRUSTED_PROXIES`.
 2. **API → banco:** queries parametrizadas via `sqlc`/`pgx`; nenhuma concatenação de SQL.
 3. **API → storage:** objetos content-addressed; a API nunca serve path arbitrário.
-4. **Worker → mídia:** libvips processa entrada não confiável em processo separado, com limites de pixels e memória.
+4. **Worker → mídia:** a validação usa decodificação apenas de header (limite de 50 MP); as variantes são geradas em Go puro, sem CGO, com limite de 24 MP/20 MB e sem bloquear o upload.
 5. **Webhook → billing:** assinatura HMAC sobre corpo bruto; nunca JWT.
 
 ---
@@ -62,7 +62,7 @@
 ## 4. API keys
 
 - Formato `hbk_<env>_<random>`; apenas SHA-256 em repouso; exibida uma única vez.
-- Escopos mínimos: `ingest` para CLI/scrapers; `admin` só para operação interna.
+- Escopos mínimos: `ingest` para CLI/scrapers; `admin` só para operação interna. Escopo não é decorativo: `ingest` não acessa rotas de admin e nenhuma API key acessa `/auth/*` de gerenciamento de conta (troca de senha, exportação, exclusão, criação de novas chaves).
 - `expires_at` e `revoked_at` verificados em todo request; `last_used_at` atualizado de forma amostral para não virar write hotspot.
 - Comparação em tempo constante; nunca logar o token, só `key_prefix`.
 - Rotação: criar nova → migrar cliente → revogar antiga. Sem "editar token".
@@ -73,14 +73,15 @@
 ## 5. Upload e mídia
 
 - **Magic bytes** obrigatórios; `Content-Type` é dica, não prova.
-- Limite de 5MB por imagem e limite de pixels (ex.: 50 MP) contra decompression bomb.
+- Limite de 50 MB por imagem e limite de 50 MP / eixo 30k contra decompression bomb. Download em CBZ: até 1.000 páginas e 512 MiB materializados; importação remota: até 50 URLs e 512 MiB por chamada.
 - **SHA-256 recalculado no servidor**; o hash do cliente é só dica.
-- **EXIF strip** e reencode via libvips no worker; nunca servir o original não validado.
+- O original validado é servido content-addressed e imutável. Variantes `thumb`/`preview` são reencodadas em Go puro (o reencode remove metadados do arquivo derivado); o original pode reter EXIF e só deve ser exposto publicamente quando o upload já foi aprovado.
 - Nome de arquivo nunca vira path; storage key é derivada do hash.
 - SVG não é aceito como imagem de página (XSS); se necessário, sanitizar em sandbox.
 - Vídeo: validar container/codec, `moov atom` no início; não transcodificar sincronamente na API.
 - Blacklist DMCA consultada antes de persistir; hash bloqueado retorna `MEDIA_BLOCKED`.
 - Bucket nunca tem escrita pública; leitura pública só para content-addressed imutável.
+- **Mídia gated:** páginas NSFW/VIP/early-access não expõem `storage_key`; o manifesto devolve `/api/v1/chapters/{id}/pages/{page}/media?token=<capability>` e a API valida entitlement antes do stream com `Cache-Control: private, no-store`; a capability é HMAC de 10 minutos vinculado a capítulo, página e leitor, necessária porque `<img>` não envia `Authorization`. A URL pública continua sem assinatura por imagem para preservar o cache da CDN.
 
 ---
 
@@ -91,7 +92,7 @@
 - CORS por allowlist explícita; sem `*` em rotas autenticadas.
 - CSP restritiva no frontend; `frame-ancestors` para evitar clickjacking.
 - **Timeouts Rígidos de Conexão (Anti-Connection Leak):**
-  - Timeout de leitura e escrita no servidor HTTP (`ReadTimeout: 10s`, `WriteTimeout: 15s`, `IdleTimeout: 60s`).
+  - Timeout de leitura e escrita no servidor HTTP (`ReadTimeout: 5m`, `WriteTimeout: 5m`, `ReadHeaderTimeout: 5s`, `IdleTimeout: 60s`); downloads de CBZ têm orçamento próprio de tempo e tamanho.
   - Timeout de contexto em todas as queries com o banco de dados (`context.WithTimeout(ctx, 5*time.Second)`). Conexões lentas ou clientes engasgados são cancelados para liberar slots do pool de conexões.
 - `CF-Connecting-IP` só é aceito de proxy confiável; caso contrário, `RemoteAddr`.
 - Métricas e debug nunca expostos na borda pública.
@@ -100,10 +101,11 @@
 
 ## 7. Abuso e rate limiting
 
-- Limites por IP, usuário e API key; headers `X-RateLimit-*` e `Retry-After`.
-- Login: 5/min por IP + identifier; resposta uniforme para não enumerar contas.
-- Comentários: 5/min; reações: 30/min; denúncias: 10/min.
-- Ingestão/upload: 30/min por ator; picos controlados por fila.
+- Limites por IP, usuário e API key; rejeições retornam `Retry-After` (não há `X-RateLimit-*` global implementado).
+- Login: 20/min por IP no processo + 10 falhas/15 min por HMAC(IP + e-mail), com lock durável de 15 min no PostgreSQL. A chave não persiste IP nem e-mail em claro.
+- Falha do PostgreSQL no throttle é fail-open com log; o limite em memória e a borda continuam protegendo.
+- Comentários: 5/min; reações: 30/min; denúncias: 10/min (roadmap de middleware dedicado; os endpoints ainda dependem do limite de borda).
+- Ingestão/upload: 30/min por IP no processo; picos controlados por fila.
 - Detecção de scraping: user-agent, padrão de acesso e desafio de borda; não confundir com leitor legítimo.
 - Bloqueio temporário > permanente; registrar motivo e expiração.
 
@@ -124,6 +126,7 @@
 - JSON estruturado (`slog`) com `request_id`, rota, status, latência, `user_id` (não e-mail).
 - Nunca logar Authorization, cookies, refresh token, API key, corpo de login ou senha.
 - IP e user agent com retenção curta; hash quando possível.
+- Views anônimas gravam apenas HMAC-SHA256 (`viewer_key`) de IP + User-Agent + dia; o IP bruto não entra na tabela de eventos. O HMAC usa o segredo JWT e não é reversível sem ele.
 - `audit_log` para ações administrativas, moderação, DMCA e gestão de chaves.
 - Acesso a logs restrito à operação.
 

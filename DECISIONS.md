@@ -53,6 +53,8 @@ A resposta vira um **ADR** (Architecture Decision Record). O valor está menos n
 | [0013](./adr/0013-escala-futura-watchlist.md) | Escala futura: PWA, multi-region, feature flags e partições | Aceito com gatilho | Arquitetura |
 | [0014](./adr/0014-api-keys-automacao.md) | API keys com hash, escopo, expiração e revogação | Aceito | Schema, API, Arquitetura |
 | [0015](./adr/0015-retencao-lgpd-ciclo-de-vida.md) | Retenção, LGPD, DMCA e ciclo de vida de dados | Aceito | Schema, API, Arquitetura |
+| [0016](./adr/0016-modelo-vip-monetizacao-hentai-manga.md) | Monetização VIP: early access, exclusividade e QoL | Aceito | Arquitetura, Schema, API |
+| [0017](./adr/0017-escopo-mvp-nsfw-video-ingestao.md) | Escopo do MVP: NSFW, vídeo e ingestão | Aceito | Roadmap, Arquitetura, Segurança |
 
 ---
 

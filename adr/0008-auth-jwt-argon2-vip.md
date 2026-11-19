@@ -38,7 +38,7 @@ O projeto precisa de autenticação stateless para a API, revogação de sessão
 3. Refresh tokens são opacos, com hash SHA-256, `family_id`, `revoked_at` e `replaced_by`.
 4. Reuso de refresh revoga a família inteira e retorna `TOKEN_REUSED`.
 5. Comentários e reações exigem e-mail verificado; leitura não exige login.
-6. Logout revoga a família; `DELETE /users/me` faz soft-delete e anonimização.
+6. Logout revoga a família; `DELETE /api/v1/auth/me` faz soft-delete e anonimização.
 
 ## Consequências
 

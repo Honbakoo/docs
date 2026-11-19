@@ -79,7 +79,7 @@ sequenceDiagram
 * **RTO Alvo (Recovery Time Objective):** Meta de **< 15 a 30 minutos** sujeita a validação em simulados periódicos cronometrados.
 
 ### Procedimento de Simulação de Desastre (Fire Drill Semestral):
-1. **Automação de Restauração:** O script `scripts/dr-restore.sh` executa o provisionamento standalone a partir do bucket frio sem intervenção manual em comandos soltos.
+1. **Automação de Restauração:** O script `engine/scripts/restore.sh` executa a restauração do dump a partir do bucket frio sem intervenção manual em comandos soltos.
 2. **Cronometragem e Critério de Aceite:** A equipe executa o simulado a cada 6 meses em ambiente de homologação limpo; o teste só é considerado aprovado se a aplicação responder `GET /readyz` em menos de 20 minutos com integridade referencial íntegra.
 
 ### Como as mídias ficam seguras durante o DR?

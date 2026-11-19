@@ -4,6 +4,8 @@
 - **Data:** 2026-11-06
 - **Relacionado:** `ARCHITECTURE.md` §1, §7.1; `API_SPECIFICATION.md` §4.1
 
+> **Nota de implementação (2026-11-12):** o runtime atual usa `job_queue` durável no PostgreSQL (`FOR UPDATE SKIP LOCKED`) para jobs, rate limit em memória e nenhum cache/Redis/Asynq. `HONBAKOO__SERVER__PROFILE` é informativo; storage é selecionado por `HONBAKOO__STORAGE__BACKEND`. Os itens de `scale` abaixo permanecem como alvo/roadmap.
+
 ## Contexto
 
 O público-alvo inclui operadores em VPS de 1 vCPU / 512MB–1GB. Ao mesmo tempo, o projeto precisa escalar horizontalmente sem reescrever a arquitetura. Redis, Asynq e S3 não podem ser obrigatórios no modo barato.

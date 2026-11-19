@@ -4,6 +4,7 @@
 > **Migration Runner:** Goose (`embed.FS`)  
 > **Query Engine:** `sqlc` + `pgx/v5` (Zero ORM, SQL Nativo compilado fortemente tipado)  
 > **Identificadores:** UUIDv7 (Ordenados temporalmente, sem fragmentação de B-Tree)  
+> **Migrations:** `00001_universal_schema.sql` (DDL base abaixo), `00002_optimize_triggers_and_indexes.sql`, `00003_hardening.sql`, `00004_chapter_view_events.sql`, `00005_auth_login_throttles.sql` e `00006_age_verification_status.sql`.
 > **Escopo Universal:** Suporte nativo a Mangá, Doujinshi (Galerias/One-shot), Manhwa (Webtoons verticais), Anime e Anime-H (Vídeo HLS/Embeds), com **I18n Multi-idiomas** e **Metadados Editoriais (Artistas, Roteiristas, Revistas/Magazines e Editoras)**.
 
 ---
@@ -592,6 +593,11 @@ CREATE TABLE users (
     -- AFERIÇÃO DE IDADE E PROTEÇÃO DE MENORES (ECA Digital - Lei nº 15.211/2025 / ANPD)
     age_verified_at TIMESTAMPTZ,            -- Data da confirmação de maioridade por método confiável
     age_verification_method VARCHAR(64),    -- 'gov_br_token', 'oidc_age_provider', etc. (Sem autodeclaração simplória)
+    -- 00006: estado explícito para o frontend distinguir pendência, rejeição e expiração.
+    age_verification_status VARCHAR(16) NOT NULL DEFAULT 'unverified'
+        CHECK (age_verification_status IN ('unverified', 'pending', 'verified', 'rejected', 'expired')),
+    age_verification_expires_at TIMESTAMPTZ,
+    age_verification_rejected_reason TEXT,
     
     -- Entitlement VIP denormalizado para leitura rápida; fonte de verdade: vip_subscriptions.
     vip_until TIMESTAMPTZ,
@@ -605,7 +611,7 @@ CREATE TABLE users (
 -- Unicidade case-insensitive (e-mail/username não podem diferir só por caixa).
 CREATE UNIQUE INDEX uq_users_email_lower ON users (lower(email));
 CREATE UNIQUE INDEX uq_users_username_lower ON users (lower(username));
--- No soft-delete (DELETE /users/me), anonimizar email/username (ex.: deleted+<id>@invalid)
+-- No soft-delete (DELETE /api/v1/auth/me), anonimizar email/username (ex.: deleted+<id>@invalid)
 -- para liberar o reuso sem apagar o histórico agregado.
 
 CREATE TABLE refresh_tokens (
@@ -643,6 +649,19 @@ CREATE TABLE password_reset_tokens (
     used_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Throttle durável de login (00005): chave HMAC de IP + e-mail, nunca PII em claro.
+-- 10 falhas em 15 min bloqueiam a chave por 15 min; sucesso limpa a linha.
+CREATE TABLE auth_login_throttles (
+    key_hash CHAR(64) PRIMARY KEY,
+    window_started_at TIMESTAMPTZ NOT NULL,
+    attempts INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    locked_until TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_auth_login_throttles_locked ON auth_login_throttles(locked_until)
+    WHERE locked_until IS NOT NULL;
+CREATE INDEX idx_auth_login_throttles_updated ON auth_login_throttles(updated_at);
 CREATE INDEX idx_password_reset_user ON password_reset_tokens(user_id);
 
 CREATE TABLE vip_subscriptions (
@@ -873,6 +892,20 @@ CREATE TABLE manga_view_daily (
 );
 CREATE INDEX idx_manga_view_daily_day ON manga_view_daily(day DESC, views DESC);
 
+-- EVENTOS DE VIEW: deduplicação por leitor/capítulo/dia antes do rollup.
+-- viewer_key é "u:<user_id>" ou HMAC-SHA256 de IP + User-Agent + dia (nunca IP bruto).
+CREATE TABLE chapter_view_events (
+    id BIGSERIAL PRIMARY KEY,
+    chapter_id UUID NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+    viewer_key VARCHAR(80) NOT NULL,
+    day DATE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    processed_at TIMESTAMPTZ,
+    UNIQUE (chapter_id, viewer_key, day)
+);
+CREATE INDEX idx_chapter_view_events_pending ON chapter_view_events(id) WHERE processed_at IS NULL;
+CREATE INDEX idx_chapter_view_events_cleanup ON chapter_view_events(day) WHERE processed_at IS NOT NULL;
+
 -- ============================================================================
 -- 8. CAPÍTULOS E EPISÓDIOS (PÁGINAS OU VÍDEOS) COM IDIOMA
 -- ============================================================================
@@ -915,6 +948,11 @@ CREATE INDEX idx_chapters_manga_lang ON chapters(manga_id, language_code, chapte
 CREATE INDEX idx_chapters_vip_release ON chapters(available_public_at) WHERE is_vip_early_access = TRUE;
 CREATE INDEX idx_chapters_latest ON chapters(published_at DESC, id DESC)
     WHERE is_published = TRUE AND is_dmca_blocked = FALSE AND published_at IS NOT NULL;
+-- Migration 00007: o feed /updates ordena por COALESCE(published_at, created_at).
+-- Sem este índice de expressão o plano vira sort/scan em catálogo grande.
+CREATE INDEX idx_chapters_latest_coalesce
+    ON chapters ((COALESCE(published_at, created_at)) DESC, id DESC)
+    WHERE is_published = TRUE AND is_dmca_blocked = FALSE;
 
 -- ============================================================================
 -- 9. STORAGE DEDUPLICADO (CAS) E PÁGINAS DE MANGÁ
@@ -954,7 +992,7 @@ CREATE TABLE media_objects (
     ready_at TIMESTAMPTZ,
     blocked_reason TEXT,
     blurhash VARCHAR(64),                   -- placeholder visual do frontend
-    variants JSONB NOT NULL DEFAULT '{}'::jsonb, -- ex.: {"thumb": {"key": "...", "width": 320}, "original_raw": {"key": "...", "byte_size": 1204000}}
+    variants JSONB NOT NULL DEFAULT '{}'::jsonb, -- gerado pelo worker: {"thumb":{"key":"media/aa/bb/<sha>-thumb.jpg","mime_type":"image/jpeg","width":320,...},"preview":{...}}
     is_restricted_vip BOOLEAN NOT NULL DEFAULT FALSE, -- Se true, armazenado em prefixo restrito com validação de assinatura
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_media_dimensions CHECK ((width IS NULL) = (height IS NULL))

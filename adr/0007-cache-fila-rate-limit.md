@@ -4,6 +4,8 @@
 - **Data:** 2026-11-06
 - **Relacionado:** `ARCHITECTURE.md` §7.1, §8.2 e §8.3; `API_SPECIFICATION.md` §4.1
 
+> **Nota de implementação (2026-11-12):** o runtime atual usa `job_queue` durável no PostgreSQL (`FOR UPDATE SKIP LOCKED`) para jobs, rate limit em memória por IP e um throttle de login durável em `auth_login_throttles` (HMAC de IP + e-mail, 10 falhas/15 min), sem cache/Redis/Asynq. `HONBAKOO__SERVER__PROFILE` é informativo; storage é selecionado por `HONBAKOO__STORAGE__BACKEND`. Views **não** usam contador em memória: cada leitura grava `chapter_view_events` e o worker agrega em lote (ver `ARCHITECTURE.md` §8.2), o que dispensa `GETDEL` e sobrevive a restart. Os itens de `scale` abaixo permanecem como alvo/roadmap.
+
 ## Contexto
 
 Cache, fila e rate limit são necessários em qualquer escala, mas Redis + Asynq + workers não cabem com folga em 512MB. O projeto precisa dos dois mundos sem duplicar a API.
@@ -41,7 +43,7 @@ Cache, fila e rate limit são necessários em qualquer escala, mas Redis + Asynq
 
 - **Positivas:** custo mínimo no budget, caminho de escala claro, sem Kafka.
 - **Negativas:** cache/fila in-process não sobrevivem a restart e não são compartilhados; duas implementações para testar.
-- **Operacionais:** no budget, reinício perde contadores de view ainda não flushados; o shutdown gracioso mitiga.
+- **Operacionais:** views são duráveis no PostgreSQL; reinício não perde eventos pendentes (o rollup recomeça no próximo ciclo).
 
 ## Gatilho de revisão
 

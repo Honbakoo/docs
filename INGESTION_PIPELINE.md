@@ -18,7 +18,7 @@
 
 ```mermaid
 flowchart TD
-    ExternalSource[(Sites Externos / Scrapers)] --> IngestQueue[Fila de Tarefas: Redis / Asynq]
+    ExternalSource[(Sites Externos / Scrapers)] --> IngestQueue[Fila de Tarefas: job_queue PostgreSQL]
     
     subgraph "Worker de Ingestão (Sandboxed)"
         IngestQueue --> FetchJob[Fetcher: TLS Fingerprint Spoofing]
@@ -72,7 +72,7 @@ interface HonbakooConnector {
 * **Pool de Proxies Rotativos:** Configurado por variável de ambiente (`INGEST_PROXY_POOL=http://user:pass@proxy1,http://...`), permitindo alternar IPs de saída caso a fonte imponha rate limit geográfico.
 
 ### 3.2 Defesa Estrita contra SSRF e DNS Rebinding (OWASP Compliance)
-Conectores buscam URLs externas de terceiros; permitir requisições cegas sem restrição de rede expõe a infraestrutura interna (metadados AWS/Cloud, portas locais do Postgres e Redis). O pipeline implementa defesa em camadas:
+Conectores buscam URLs externas de terceiros; permitir requisições cegas sem restrição de rede expõe a infraestrutura interna (metadados AWS/Cloud, portas locais do PostgreSQL, S3/MinIO e serviços de metadados). O pipeline implementa defesa em camadas:
 
 1. **Validação do Endereço IP Conectado (Anti-DNS Rebinding):**
    * A resolução DNS é desacoplada da conexão.

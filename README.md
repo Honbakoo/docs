@@ -11,7 +11,7 @@ O **Honbakoo** é uma engine de backend modular, headless e de altíssima perfor
 * 🏛️ **[Arquitetura do Sistema (ARCHITECTURE.md)](./ARCHITECTURE.md)**:
   * Princípios de design e decisão técnica (Go, sem ORM com `sqlc`).
   * Estrutura de Auth, VIP/Assinaturas e Comunidade (Comentários).
-  * Pipeline de processamento de mídia e imagens com `libvips`.
+  * Pipeline de mídia content-addressed, CDN imutável, variantes em Go puro e entrega protegida para conteúdo gated.
   * Simulação de ingestão de usuários e benchmarks com `k6`.
   * Estrutura de pastas do projeto.
 * 🗄️ **[Modelagem e Schema do Banco de Dados (DATABASE_SCHEMA.md)](./DATABASE_SCHEMA.md)**:
@@ -21,12 +21,12 @@ O **Honbakoo** é uma engine de backend modular, headless e de altíssima perfor
   * Árvores de comentários hierárquicos com `ltree`.
   * Deduplicação de storage (CAS) com SHA-256 e Blacklist DMCA.
 * 🔌 **[Especificação da API RESTful Headless (API_SPECIFICATION.md)](./API_SPECIFICATION.md)**:
-  * Contrato de rotas REST v1 stateless (sem WebSockets).
+  * Contrato de rotas REST v1 stateless (sem WebSockets), validado contra o router real.
   * Paginação keyset com cursor opaco para alta escala.
-  * Endpoints para Leitor de Mangá/Webtoon e Player de Vídeo/Anime.
-  * Uploads presigned (scale) ou diretos na API (budget), com deduplicação por hash.
-  * Auth completo (verificação de e-mail, refresh rotativo, reset), ratings e denúncias.
-  * Políticas de cache de borda (CDN), rate limiting e modelo de erro.
+  * Catálogo com busca, filtros, tags, updates, favoritos e histórico.
+  * Reader de imagem + download CBZ; áudio/vídeo ainda não tem fluxo editorial.
+  * Auth completo (verificação de e-mail, refresh rotativo, reset), API keys, ratings e denúncias.
+  * Rate limiting em memória por processo e modelo de erro `{error}`.
 * 🧭 **[Decisões de Arquitetura (DECISIONS.md)](./DECISIONS.md)**:
   * Índice de ADRs em [`adr/`](./adr/).
   * Matriz "copiar / não copiar" de práticas de mercado.
@@ -41,7 +41,7 @@ O **Honbakoo** é uma engine de backend modular, headless e de altíssima perfor
   * Deploy, rollback, capacidade e custo.
 * 🚨 **[Runbooks Operacionais (RUNBOOKS.md)](./RUNBOOKS.md)**:
   * Procedimentos passo a passo para resolução de incidentes.
-  * Esgotamento de disco, database locks e falha de Redis.
+  * Esgotamento de disco, database locks e backlog da fila durável.
   * Takedowns DMCA em < 5 minutos e rotação emergencial de segredos.
 * 🛡️ **[Governança de Conteúdo, Moderação e Suporte (CONTENT_GOVERNANCE_AND_SUPPORT.md)](./CONTENT_GOVERNANCE_AND_SUPPORT.md)**:
   * Máquina de estados de publicação (`draft`, `pending_review`, `published`, `rejected`).
@@ -58,20 +58,22 @@ O **Honbakoo** é uma engine de backend modular, headless e de altíssima perfor
   * Multiplexação de conexões com PgBouncer (5.000 conexões para 50 no banco).
   * Plano de Disaster Recovery para restaurar o ecossistema em < 15 minutos.
 * 📄 **[Contrato Executável OpenAPI 3.1 (api/openapi.yaml)](./api/openapi.yaml)**:
-  * Especificação formal lintada pronta para geração de clientes SDK (TypeScript, Dart/Flutter, Python).
+  * Especificação 3.1 que cobre todas as rotas reais, pronta para gerar clientes SDK (TypeScript, Dart/Flutter, Python).
 * 🧪 **[Estratégia de Testes (TESTING.md)](./TESTING.md)**:
-  * Unit, integração com Testcontainers, contrato, E2E e k6.
-  * Gates de CI e definition of done.
+  * Unit, integração com PostgreSQL real, contrato OpenAPI e segurança.
+  * Gates reais da CI (fmt, vet, build, sqlc diff, migrations up/down, race, govulncheck, Trivy, SBOM).
+  * E2E, k6 e Testcontainers ainda planejados.
 * 🗺️ **[Roadmap (ROADMAP.md)](./ROADMAP.md)**:
-  * P0 concluído, P1 com critérios de aceite e P2 com gatilhos.
+  * P0 e P1 implementados (com ressalvas de operação/E2E), incluindo views por evento durável, e P2 com gatilhos.
 * 🧾 **[Retenção e LGPD (ADR-0015)](./adr/0015-retencao-lgpd-ciclo-de-vida.md)**:
   * Classes de dado, prazos, anonimização, DMCA e backup.
 * 💎 **[Modelo de Monetização VIP e Early Access (ADR-0016)](./adr/0016-modelo-vip-monetizacao-hentai-manga.md)**:
   * Acesso antecipado temporal (Early Access) vs exclusividade permanente (Paywall seletivo/Uncensored).
   * Vantagens QoL para apoiadores: download de capítulos em `.cbz` em 1 clique e resolução original lossless.
 * ⚙️ **[Especificação de Configuração Self-Hosted (CONFIGURATION.md)](./CONFIGURATION.md)**:
-  * Hierarquia de 3 camadas: defaults embutidos, `.env` estruturado e tabela `system_settings` com hot-reload.
-  * Mapeamento completo de variáveis de ambiente (`HONBAKOO__SECTION__KEY`).
+  * Defaults embutidos + `.env`/variáveis reais (`HONBAKOO__SECTION__KEY`), com validação fail-closed.
+  * Matriz completa: servidor, banco, auth, conteúdo, storage S3, billing, SMTP e observabilidade.
+  * `system_settings` existe no schema, mas ainda sem hot-reload/endpoint (Camada 3 reservada).
   * Endpoint público de configuração do frontend (`GET /api/v1/config`).
 
 ---
@@ -90,25 +92,37 @@ A resposta vira um ADR. O objetivo não é copiar a arquitetura de quem tem outr
 
 ### Status e próximos passos
 
-- **P0 — corrigido nos docs:** mídia/CDN, cursor, `ltree`, constraints, rating, histórico, VIP e Redis opcional.
-- **P1 — antes do MVP:** OpenAPI executável, erros/idempotência, observabilidade, backup/restore, CI/CD, testes de integração, segurança de upload, API keys, retenção/LGPD e runbooks.
-- **P2 — depois do MVP:** busca/ranking, feed/notificações, moderação madura, billing maduro, analytics, i18n/acessibilidade, performance de escala, operação avançada, ingest e PWA/offline.
+- **P0 — implementado:** mídia/CAS com entrega CDN ou endpoint protegido, cursor keyset, `ltree`, constraints, rating, histórico, VIP, API keys, LGPD, fila durável no PostgreSQL, contagem de views por eventos com rollup em lote e throttle de login durável.
+- **P1 — implementado (com ressalvas):** OpenAPI executável, erros/idempotência, observabilidade com métricas de views/GC/variantes, backup/restore com manifesto e verificação, CI/CD, segurança de upload, API keys, LGPD e runbooks. Testcontainers/E2E, agendamento do dump e o restore mensal ainda são pendências operacionais.
+- **Núcleo de produto:** busca, tags, updates, favoritos, histórico, admin real, reordenação/import de páginas, S3 e SMTP.
+- **P2 — depois do MVP:** busca/ranking, feed/notificações, moderação madura, billing maduro, analytics, i18n/acessibilidade, performance de escala, ingest e PWA/offline.
 
 ---
 
-## 🚀 Como Executar Localmente (Visão Rápida)
+## 🚀 Como Executar Localmente
 
-> **Status:** este repositório contém **apenas a documentação** (arquitetura, schema e contrato da API). A engine, o `docker-compose.yml`, as migrations e os testes vivem no repositório da engine. Os comandos abaixo descrevem a UX alvo do projeto e não funcionam a partir deste repositório.
-
-No repositório da engine, o objetivo é **zero atrito**:
+Este repositório contém a documentação. A engine vive no repositório irmão `engine/` (module `github.com/Honbakoo/engine`). Localmente:
 
 ```bash
-# Clonar o repositório da engine (quando publicado)
-git clone <url-do-repositorio-da-engine> honbakoo
-cd honbakoo
+cd engine
 
-# Subir toda a infraestrutura com 1 comando
-docker compose up -d
+# 1. Configuração
+cp .env.example .env
+# edite DATABASE__URL e gere segredos com: openssl rand -base64 32
+
+# 2. PostgreSQL 16
+podman-compose up -d postgres
+# ou: docker compose up -d postgres
+
+# 3. Migrations + API
+go build -o bin/honbakoo ./cmd/honbakoo
+HONBAKOO__ENV=development ./bin/honbakoo --role=migrate
+HONBAKOO__ENV=development ./bin/honbakoo --role=all
+
+# 4. Verificação
+curl http://localhost:8080/healthz
+curl http://localhost:8080/readyz
+go test -race -count=1 ./...
 ```
 
-Enquanto a engine não é publicada, use estes documentos como contrato de implementação.
+Para stack completa (API + banco) use `docker compose up -d --build`. Em produção, defina `HONBAKOO__ENV=production`, `PUBLIC_URL` com HTTPS e segredos fortes; a API se recusa a subir com os placeholders de desenvolvimento.

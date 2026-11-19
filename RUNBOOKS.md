@@ -10,7 +10,7 @@
 | :--- | :--- | :--- | :--- |
 | **RB-001** | Esgotamento de Disco na VPS (`budget`) | P1 - Alta | < 15 min |
 | **RB-002** | Sobrecarga de Banco (PostgreSQL Spikes & Lock) | P1 - Alta | < 10 min |
-| **RB-003** | Falha de Conexão com Redis no modo `scale` | P2 - Média | < 5 min |
+| **RB-003** | Fila durável (`job_queue`) parada ou com backlog | P2 - Média | < 5 min |
 | **RB-004** | Procedimento de Takedown Imediato DMCA | P1 - Alta | < 5 min |
 | **RB-005** | Backup Manual e Teste de Restore (DR) | Rotina | < 30 min |
 | **RB-006** | Rotação Emergencial de Chaves e Segredos | P0 - Crítica | < 20 min |
@@ -63,32 +63,59 @@
    ```sql
    SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid = <PID_BLOQUEANTE>;
    ```
-3. **Verificar se o buffer do Redis travou o batch flush:**
-   Se o worker de agregação de views estiver disparando writes concorrentes em massa, force o intervalo do job para 15 minutos via variável:
-   ```env
-   VIEW_FLUSH_INTERVAL=15m
+3. **Verificar backlog da fila durável:**
+   ```sql
+   SELECT status, count(*) FROM job_queue GROUP BY status ORDER BY status;
+   SELECT id, status, attempts, run_at, locked_until, last_error
+   FROM job_queue
+   WHERE status IN ('pending', 'processing')
+   ORDER BY run_at
+   LIMIT 20;
    ```
+   Jobs `processing` com `locked_until` no passado voltam a ser elegíveis automaticamente no próximo `FetchNextJob`.
 
 ---
 
-## 4. RB-003: Falha do Redis no modo `scale`
+## 4. RB-003: Fila durável (`job_queue`) parada ou com backlog
 
 ### Sintomas:
-* `/readyz` retorna `503 Service Unavailable` com erro em `redis`.
-* Rate limiter começa a rejeitar requisições ou liberar sem contagem.
+* E-mails, webhooks, importações ou limpezas deixam de acontecer.
+* Crescimento de linhas `pending` em `job_queue` e/ou `attempts` chegando a `max_attempts`.
+
+### Diagnóstico:
+```sql
+SELECT status, count(*) FROM job_queue GROUP BY status ORDER BY status;
+-- Views: backlog deve ficar perto de zero (flush a cada 30 segundos no worker).
+SELECT count(*) AS pending_views, min(created_at) AS oldest
+FROM chapter_view_events WHERE processed_at IS NULL;
+-- NUNCA resetar processed_at para reprocessar: isso duplica views já agregadas.
+-- Recuperação de contagem exige reconstruir manga_view_daily e views_all_time.
+SELECT id, status, attempts, max_attempts, run_at, locked_until, last_error
+FROM job_queue
+WHERE status IN ('pending', 'processing')
+ORDER BY run_at
+LIMIT 50;
+```
 
 ### Recuperação:
-1. **No modo `scale`, se o Redis cair:**
-   A API Honbakoo possui fallback automático para cache em memória local (`in-memory LRU`) se a variável `REDIS_FALLBACK_LOCAL=true` estiver ativa.
-2. **Reiniciar o container do Redis:**
+1. **Confirmar que a API está de pé e com o worker ativo:**
    ```bash
-   docker compose restart redis
+   curl -fsS https://<host>/readyz
    ```
-3. **Validar latência e memória do Redis:**
-   ```bash
-   redis-cli -u $REDIS_URL ping
-   redis-cli -u $REDIS_URL info memory
+   Se a API reiniciou recentemente, jobs `processing` órfãos são reclamados quando `locked_until` expira (lock de 5 min renovado por heartbeat).
+2. **Reenfileirar jobs terminais com falha, após corrigir a causa:**
+   ```sql
+   UPDATE job_queue
+   SET status = 'pending', attempts = 0, locked_until = NULL, last_error = NULL, run_at = NOW()
+   WHERE status = 'failed' AND id = <JOB_ID>;
    ```
+3. **Validar a drenagem:**
+   ```sql
+   SELECT status, count(*) FROM job_queue GROUP BY status;
+   ```
+   Não há Redis: a fila é o próprio PostgreSQL (`FOR UPDATE SKIP LOCKED`).
+4. **Backlog de views:** `honbakoo_views_pending_events` e `honbakoo_views_oldest_pending_event_age_seconds` devem ficar próximos de zero. O `role=api` não faz rollup; confirme que `role=worker` ou `all` está rodando.
+5. **Nunca** resetar `processed_at` para "reprocessar" views: os eventos já foram somados. Uma correção de agregados exige reconstruir `manga_view_daily`, `chapters.views_count` e `mangas.views_all_time` a partir de uma fonte confiável e documentar a janela afetada.
 
 ---
 
@@ -122,28 +149,41 @@
 
 ### Backup Manual Rápido (Dump Consistente):
 ```bash
-# Executa dump comprimido em gzip
-docker compose exec -T postgres pg_dump -U honbakoo -d honbakoo_db -Fc | gzip > backup_$(date +%Y%m%d_%H%M%S).dump.gz
+cd engine
 
-# Se configurado S3/B2 externo, envia automaticamente:
-rclone copy backup_*.dump.gz remote_backup:honbakoo-dumps/
+# Dump custom comprimido + checksum + mídia local (se backend=local) + retenção
+./scripts/backup.sh
+
+# Cópia externa obrigatória em produção (rclone configurado para R2/B2/Wasabi)
+BACKUP_REMOTE=r2:honbakoo-backups ./scripts/backup.sh
+
+# Verifica checksum, estrutura do dump, manifesto e arquivo de mídia
+./scripts/verify-backup.sh
 ```
+
+O backup gera um manifesto `honbakoo-<stamp>.manifest` com checksums, ambiente, backend e contagens. Em produção, `backup.sh` recusa rodar sem `BACKUP_REMOTE`, salvo `BACKUP_ALLOW_LOCAL_ONLY=1`. Um dump que falha em `pg_restore --list` não é publicado.
 
 ### Teste de Restauração em Ambiente Isolado:
 ```bash
-# Descompactar e restaurar em banco de homologação/teste
-gunzip -c backup_*.dump.gz | docker compose exec -T postgres pg_restore -U honbakoo -d honbakoo_test --clean --no-owner
+cd engine
+
+# Nunca use a URL de produção. O script exige confirmação explícita.
+./scripts/restore.sh \
+  --target-url "postgres://honbakoo_user:senha@localhost:5432/honbakoo_restore?sslmode=disable" \
+  --confirm restore
 ```
+
+O `restore.sh` chama `verify-backup.sh` (checksum, `pg_restore --list`, manifesto e mídia), restaura em transação única, imprime contagens de `users`/`mangas`/`chapters`/`media_objects` e, opcionalmente, restaura a mídia com `--media-archive` + `--media-dir`. Para o drill mensal use `restore-drill.sh --target-url ... --confirm restore`: ele compara as contagens restauradas com o manifesto e grava o resultado em `backups/restore-drills.log`. Depois valide `GET /readyz` e registre o tempo total.
 
 ---
 
 ## 7. RB-006: Rotação Emergencial de Chaves e Segredos
 
-### Se o `JWT_SECRET` for comprometido:
+### Se o `HONBAKOO__AUTH__JWT_SECRET` for comprometido:
 1. Gerar novo segredo criptográfico:
    ```bash
    openssl rand -base64 32
    ```
-2. Atualizar o arquivo `.env` com a nova chave em `JWT_SECRET`.
+2. Atualizar o arquivo `.env` com a nova chave em `HONBAKOO__AUTH__JWT_SECRET`.
 3. Reiniciar a API (`docker compose restart api`).
 4. **Impacto:** Todos os usuários serão deslogados e precisarão fazer login novamente, invalidando 100% dos tokens vazados.

@@ -15,7 +15,7 @@ A arquitetura do Honbakoo foi desenhada para resolver os maiores problemas reais
 4. **Zero Vendor Lock-in & Dual-Profile:** Suporte nativo ao modo `budget` (100% autocontido, sem dependências externas pagas) e ao modo `scale` (S3 externo, CDNs distribuídas e proxies).
 5. **Sem ORM Pesado (Zero Runtime Reflection):** Utilização estrita de SQL nativo compilado com **`sqlc` + `pgx`**. Queries validadas em tempo de compilação sem custos ocultos de CPU/RAM.
 6. **Desacoplamento de Metadados vs. Mídia:** A API de dados nunca bloqueia o runtime para ler e servir arquivos pesados de imagem ou vídeo.
-7. **Prevenção Ativa de Gargalos Clássicos:** Proteção contra *Hot-linking*, *Cache Stampede / Thundering Herd* via `singleflight` + cache curto, e *Database Locking* por contagem de views via buffer atômico (Redis no scale, memória no budget).
+7. **Prevenção Ativa de Gargalos Clássicos:** Mídia content-addressed com `Cache-Control` imutável para absorver picos na borda, variantes best-effort para capas/previews, paginação keyset sem `OFFSET` e índices GIN/trigram para busca. Contagem de views usa eventos duráveis e rollup em lote (ver §8.2); cache de aplicação e `singleflight` são roadmap (ver §7.1 e §8.3).
 8. **Benchmark Seletivo com Decisão Registrada:** Toda escolha nasce de "como o mercado resolve isso?" e é dividida em **o que copiar** e **o que não copiar**. As decisões vivem em [`DECISIONS.md`](./DECISIONS.md) e [`adr/`](./adr/), com o motivo da rejeição explícito — é isso que preserva a vantagem de custo e simplicidade.
 
 ### 1.1 O que copiamos e o que não copiamos
@@ -23,14 +23,14 @@ A arquitetura do Honbakoo foi desenhada para resolver os maiores problemas reais
 | Prática de mercado | Decisão | Racional |
 | :--- | :--- | :--- |
 | CDN + cache imutável | **Copiar** | Torna R2/zero-egress viável e absorve picos |
-| URL assinada por imagem/usuário | **Não copiar** | Destrói a cache key da CDN; assinatura fica no manifesto |
+| URL assinada por imagem/usuário na CDN | **Não copiar** | Destrói a cache key da CDN; capability curta fica no manifesto e aponta para a API |
 | Image slicing / DRM | **Não no MVP** | Custo de UX e infraestrutura; só com licenciamento |
 | REST + OpenAPI 3.1 | **Copiar** | Contrato executável e clientes previsíveis |
 | Cursor keyset opaco | **Copiar** | Estável sob escrita concorrente; sem `OFFSET` |
 | GraphQL / WebSocket público | **Não copiar** | Complexidade de cache/autorização sem ganho no budget |
 | Monolito modular | **Copiar** | Simplicidade operacional com fronteiras claras |
 | Microservices / Kafka | **Não copiar** | Custo operacional incompatível com 1 VPS |
-| Redis obrigatório | **Não no budget; sim no scale** | 512MB não comporta PG + Redis + Go + libvips |
+| Redis obrigatório | **Não** | O runtime usa `job_queue` no PostgreSQL; Redis/Asynq ficam como roadmap de scale, não como dependência |
 | Postgres FTS + trigram | **Copiar** | Uma dependência a menos que Elasticsearch |
 | ORM pesado | **Não copiar** | `sqlc` dá tipagem sem reflection em runtime |
 | VIP como role permanente | **Não copiar** | Entitlement expira; role não |
@@ -48,8 +48,8 @@ A arquitetura do Honbakoo foi desenhada para resolver os maiores problemas reais
 
 * **Eficiência sob Pouca RAM:** Uma API completa em Go consome entre **20MB e 45MB de RAM** em modo ocioso, permitindo rodar em servidores de \$3-\$4/mês sem risco de OOM (*Out Of Memory*).
 * **Concorrência Leve com Goroutines:** Requisições HTTP concorrentes tratadas em milissegundos com stack memory inicial de apenas ~2KB.
-* **Ferramental Nativo de Concorrência:** O pacote `golang.org/x/sync/singleflight` elimina requisições duplicadas simultâneas ao banco de dados em picos de lançamento.
-* **Ecossistema Maduro de Segurança:** Suporte comprovado e auditado para `Argon2id` (hash de senhas resistente a GPUs), JWT rotativo e middlewares de rate limiting em memória.
+* **Concorrência Nativa com Limites Explícitos:** `pgxpool` controla o número de conexões ao PostgreSQL; goroutines leves atendem requisições concorrentes sem threads por conexão. Deduplicação com `singleflight` é roadmap (§8.3).
+* **Ecossistema Maduro de Segurança:** Suporte comprovado e auditado para `Argon2id` (hash de senhas resistente a GPUs), JWT rotativo, middlewares de rate limiting em memória e throttle de login durável no PostgreSQL.
 
 ### 2.2 Tabela de Componentes
 
@@ -61,7 +61,7 @@ A arquitetura do Honbakoo foi desenhada para resolver os maiores problemas reais
 | **Ferramenta de Migrations** | **Goose (`pressly/goose`)** ([ADR-0011](./adr/0011-operacao-observabilidade-backup-ci.md)) | `golang-migrate`, Atlas | Suporte a `embed.FS` (migrations embutidas no binário único Go), `down` e suporte híbrido (SQL puro + lógica Go se necessária). |
 | **Camada de Banco** | **`sqlc` + `pgx`** ([ADR-0006](./adr/0006-postgres-sqlc-busca.md)) | GORM, Ent, Prisma | **Sem ORM**. SQL nativo compilado para structs Go estáticas. Performance máxima e queries transparentes. |
 | **Banco Relacional**| **PostgreSQL 16+** ([ADR-0006](./adr/0006-postgres-sqlc-busca.md)) | MySQL, SQLite, MongoDB | Suporte avançado a índices GIN (para tags booleanas ultra-rápidas), `tsvector` e trigramas (`pg_trgm`/`unaccent`) para busca textual de títulos. |
-| **Cache & Buffers** | **Redis / KeyDB no scale; LRU in-process no budget** ([ADR-0003](./adr/0003-perfil-dual-budget-scale.md), [ADR-0007](./adr/0007-cache-fila-rate-limit.md)) | Memcached | Estruturas atômicas (`INCR`, `GETDEL`) e expiração configurável no scale; no budget, `ristretto` evita mais um processo. |
+| **Cache & Buffers** | **Sem cache de aplicação; mídia imutável cacheada na borda/CDN** ([ADR-0007](./adr/0007-cache-fila-rate-limit.md)) | Memcached, Redis | O MVP consulta o PostgreSQL diretamente. Cache compartilhado é roadmap; views usam eventos duráveis no PostgreSQL (§8.2), não buffer em memória. A mídia content-addressed dispensa cache de objeto no servidor. |
 | **Processamento Img**| **Client-Side + libvips (worker)** ([ADR-0010](./adr/0010-uploads-ingestao-cas.md)) | ImageMagick, PIL | Otimização pré-upload no navegador poupa banda e CPU; `libvips` roda apenas no `cmd/worker` (CGO + imagem com libvips), com `vips_concurrency_set(1)` no perfil budget. |
 | **Abstração Storage** | **Local FS / Cloudflare R2** ([ADR-0001](./adr/0001-midia-content-addressed-cdn.md), [ADR-0010](./adr/0010-uploads-ingestao-cas.md)) | Wasabi, AWS S3, Cloudinary | Abstração universal compatível com S3. Modo `budget` usa disco local; modo nuvem usa Cloudflare R2 com **tráfego de saída 100% gratuito (Zero Egress)**. |
 | **Reverse Proxy / SSL**| **Caddy** ou **NGINX** | Traefik, Apache | 100% gratuitos e open source. Caddy gera certificados HTTPS automáticos via Let's Encrypt com zero esforço. |
@@ -94,17 +94,15 @@ flowchart TD
     end
 
     subgraph "Camada de Dados & Persistência"
-        Modules -->|sqlc + pgx / Raw SQL| PG[(PostgreSQL 16)]
-        Modules -->|Cache/Fila/Rate-Limit (opcional no budget)| Cache[(Redis / KeyDB)]
-        FlushWorker[Background Views Flusher] -.->|GETDEL + UPSERT em manga_view_daily| PG
-        FlushWorker -.->|Lê e remove contadores| Cache
+        Modules -->|sqlc + pgx / Raw SQL| PG[(PostgreSQL 16 + job_queue)]
+        Modules -->|Rate limit em memória| MemRL[Fixed-window por processo]
     end
 
     subgraph "Mídia & Storage (Abstração Universal S3)"
         Edge -->|Leitura Direta de Imagens em Cache| MediaServer[Static Media Server: NGINX / Caddy sendfile]
         MediaServer --> Storage[(Storage: Disco Local ou Cloudflare R2 / Backblaze B2)]
         
-        JobQueue[Asynq/Redis ou fila in-process no budget] --> ImgWorker[Image Worker: libvips]
+        JobQueue[job_queue PostgreSQL: FOR UPDATE SKIP LOCKED] --> ImgWorker[Inspeção/CAS no processo da API]
         ImgWorker -->|Converte para WebP + Deduplica por Hash| Storage
     end
 
@@ -150,8 +148,8 @@ Fazer múltiplos `JOINs` relacionais clássicos degrada a performance do banco s
 
 ### 5.2 Validação e Limites Rígidos no Backend (Defesa contra Bombas de Descompressão)
 * **Validação dos Primeiros 32 Bytes (Magic Bytes e Dimensões):** Antes de enviar o stream para o `libvips`, a aplicação inspeciona o cabeçalho.
-  * Se `byte_size > 5MB` (configurável via `MEDIA_MAX_BYTES`), o upload é abortado imediatamente (`413 Payload Too Large`).
-  * Se `width * height > 50_000_000` (50 Megapixels, configurável via `MEDIA_MAX_PIXELS`), o arquivo é sumariamente rejeitado para evitar **Pixel Flood Attack / Zip Bomb** que causaria estouro de RAM (OOM) no servidor.
+  * Se `byte_size > 50MB` (constante `storage.MaxMediaUploadBytes`, não configurável), o upload é abortado imediatamente (`413 Payload Too Large`).
+  * Se `width * height > 50_000_000` (50 Megapixels, constante `media.MaxMegapixels`), o arquivo é sumariamente rejeitado para evitar **Pixel Flood Attack / Zip Bomb** que causaria estouro de RAM (OOM) no servidor.
 * **Semáforo Estrito de Processamento de Imagens (Concurrency Limiter):**
   * No perfil `budget`, o worker de conversão `libvips` é limitado a concorrência **1** (1 imagem por vez), com `nice -n 19` (prioridade mínima de CPU). Isso impede que uploads paralelos travem a CPU em 100% e derrubem a API de leitura.
 * **Quarentena de Uploads Órfãos (Garbage Collection):**
@@ -162,7 +160,7 @@ Fazer múltiplos `JOINs` relacionais clássicos degrada a performance do banco s
   * Para rodar dentro do próprio host com consumo ínfimo de memória, os conectores de sites externos rodam em WebAssembly ou scripts leves interpretados em sandbox no Go (via `goja`).
 * **Scrapers Externos em Python (Ingestão Local do Administrador):**
   * Scrapers complexos (Selenium, navegadores headless, proxies rotativos) rodam na máquina pessoal do administrador.
-  * O script em Python extrai os dados e faz a ingestão no servidor via rota autenticada da API (`POST /api/v1/ingest/chapter`) usando uma API Key de ingestão segura (`X-API-Key`).
+  * O script em Python extrai os dados e importa as páginas via `POST /api/v1/editorial/chapters/{id}/pages/import` (1–50 URLs por chamada, com teto agregado de 512 MiB) usando `X-API-Key` ou Bearer. O cliente HTTP é compartilhado e aplica anti-SSRF (bloqueio de IP privado/loopback/metadata) em cada URL; conectores dedicados de ingestão ainda são roadmap.
   * A chave vive em `api_keys` com hash, escopo `ingest`, expiração e revogação; o ator e o `request_id` entram em `audit_log` ([ADR-0014](./adr/0014-api-keys-automacao.md)).
 
 ---
@@ -183,25 +181,26 @@ Fazer múltiplos `JOINs` relacionais clássicos degrada a performance do banco s
 Para garantir que uma pessoa consiga rodar o Honbakoo em uma máquina de \$3/mês (ou até em um PC antigo/Raspberry Pi) com fluidez:
 
 ### 7.1 O Perfil Dual no `.env` ([ADR-0003](./adr/0003-perfil-dual-budget-scale.md))
-O sistema se autoconfigura a partir da variável `HONBAKOO_PROFILE`. A regra é: **nenhuma dependência paga ou pesada é obrigatória no budget**.
+O sistema se autoconfigura a partir da variável `HONBAKOO__SERVER__PROFILE`. A regra é: **nenhuma dependência paga ou pesada é obrigatória no budget**.
 
-| Capacidade | `PROFILE=budget` | `PROFILE=scale` |
+| Capacidade | Implementado hoje (ambos perfis) | Alvo `scale` (roadmap) |
 | :--- | :--- | :--- |
-| **Cache** | LRU in-process (`ristretto`) | Redis/KeyDB compartilhado |
-| **Fila de jobs** | Worker pool in-process | Asynq + Redis |
-| **Views** | Buffer em memória + flush periódico | Buffer Redis + `GETDEL` atômico |
-| **Storage** | Disco local (`sendfile`) | S3/R2/B2 |
-| **Rate limit** | Token bucket em memória | Redis (sliding window/GCRA) |
-| **Mídia** | Worker local com `vips_concurrency_set(1)` | Workers distribuídos |
+| **Cache de aplicação** | Nenhum; mídia imutável cacheada na borda/CDN | Cache compartilhado |
+| **Fila de jobs** | `job_queue` durável no PostgreSQL (`FOR UPDATE SKIP LOCKED`) | Mesma fila + workers dedicados |
+| **Views** | Evento durável por leitor/capítulo/dia + rollup em lote no PostgreSQL | Mesmo desenho; workers dedicados |
+| **Storage** | Local (`sendfile`) ou S3/R2/B2 via `HONBAKOO__STORAGE__BACKEND` | S3/R2/B2 |
+| **Rate limit** | Fixed-window em memória + throttle de login durável no PostgreSQL | Compartilhado na borda/Redis |
+| **Mídia** | Inspeção de header + CAS no processo da API | Workers distribuídos com `libvips` |
+
+> **Estado real (2026-11-12):** `HONBAKOO__SERVER__PROFILE` é hoje informativo (aparece no `/api/v1/config` e na telemetria) e não troca implementações. A seleção de storage é feita por `HONBAKOO__STORAGE__BACKEND`; a fila é sempre PostgreSQL; não há Redis/Asynq nem cache de aplicação. Views são contabilizadas por eventos no PostgreSQL (§8.2), variantes de mídia são geradas pelo worker (§8.5) e o lock de login é durável (§8.6).
 
 * **`PROFILE=budget` (Padrão):**
   * Salva imagens diretamente no disco local (sem S3).
   * Serve arquivos estáticos via Caddy/NGINX com `sendfile`.
   * PostgreSQL tunado para no máximo 150MB (`shared_buffers = 128MB`), `work_mem = 4MB`, `max_connections = 20`.
-  * Redis é **opcional**: se `CACHE_DRIVER=memory`, cache/fila/rate-limit rodam no processo.
 * **`PROFILE=scale`:**
-  * Habilita driver S3 apontando para **Cloudflare R2** (zero egress) ou **Backblaze B2**.
-  * Habilita Redis, Asynq e workers em nós separados.
+  * Use `HONBAKOO__STORAGE__BACKEND=s3` apontando para **Cloudflare R2** (zero egress) ou **Backblaze B2**.
+  * A API é stateless e pode rodar em N réplicas; todas compartilham PostgreSQL, `job_queue` e o bucket.
 
 ### 7.2 Eliminação de Custos de Banda (Zero Egress com Cloudflare R2 e Cache)
 * **Cloudflare R2:** Oferece 10GB de storage grátis e **taxa zero de egress (tráfego de saída ilimitado gratuito)**. Elimina o maior gargalo financeiro de plataformas de leitura.
@@ -209,7 +208,6 @@ O sistema se autoconfigura a partir da variável `HONBAKOO_PROFILE`. A regra é:
   * Toda **imagem de página** (content-addressed) é servida com os headers:
     ```http
     Cache-Control: public, max-age=31536000, immutable
-    ETag: "hash-sha256-da-pagina"
     ```
   * Se o leitor reler ou navegar pelas páginas do capítulo, 0 bytes saem do servidor — a imagem carrega instantaneamente da memória do dispositivo do leitor.
 
@@ -227,27 +225,41 @@ O sistema se autoconfigura a partir da variável `HONBAKOO_PROFILE`. A regra é:
 ## 8. Resolução de Gargalos Clássicos da Indústria
 
 ### 8.1 Proteção contra Hot-Linking sem Matar o Cache de CDN ([ADR-0001](./adr/0001-midia-content-addressed-cdn.md))
-* **Mídia é content-addressed e pública:** cada arquivo é servido em `/media/{sha256}.webp` (com sharding por prefixo do hash) com `Cache-Control: public, max-age=31536000, immutable`. O hash de 256 bits funciona como capability: é impossível adivinhar a URL, e o cache de borda atinge >90% de hit ratio.
-* **Assinatura fica no manifesto, não na imagem:** `GET /chapters/:id/pages` é `private, no-store` e, quando necessário (VIP/early access), devolve URLs assinadas de curta duração. As imagens em si continuam imutáveis e cacheáveis.
-* **Bloqueio de Referer/CORP:** NGINX/Caddy rejeita `Referer` de domínios não autorizados e responde com `Cross-Origin-Resource-Policy: same-site`; Cloudflare WAF cobre o resto. Isso é fricção contra hotlink, não autorização.
+* **Mídia é content-addressed e pública:** cada arquivo é servido em `/uploads/media/{sha256}.{ext}` no backend local (ou em `S3_PUBLIC_URL/media/...` no S3, com sharding por prefixo do hash) com `Cache-Control: public, max-age=31536000, immutable`. O hash de 256 bits funciona como capability: é impossível adivinhar a URL, e o cache de borda atinge >90% de hit ratio. Variantes `thumb` e `preview` usam os mesmos headers e chaves derivadas do hash (`...-thumb.jpg`).
+* **Controle de acesso fica no manifesto, não na imagem:** `GET /chapters/:id/pages` é `private, no-store`, aplica a checagem de entitlement (VIP/early access) e devolve cada página com `url`, `access` (`cdn`, `protected` ou `unavailable`) e metadados. Página pública aponta para a CDN e inclui `storage_key` + variantes; página NSFW/VIP/early-access aponta para `/api/v1/chapters/{id}/pages/{page}/media?token=<capability>`, omite `storage_key` e variantes, e a API faz o stream com `Cache-Control: private, no-store`. A capability é um HMAC de 10 minutos vinculado a capítulo, página, leitor e flags de entitlement; ela existe porque `<img>` não envia `Authorization`, não é um JWT longo e nunca é usada na CDN. URLs assinadas por imagem na CDN continuam fora do escopo: destruiriam o cache key e o hit ratio.
+* **Bloqueio de Referer na aplicação:** com `HONBAKOO__STORAGE__HOTLINK_PROTECTION=true`, o backend local rejeita `Referer` de host diferente de `SERVER__PUBLIC_URL`. Cabeçalhos `Cross-Origin-Resource-Policy`, regras de WAF e cache ficam a cargo do proxy/CDN. Isso é fricção contra hotlink, não autorização.
 * **Por que não token por IP/sessão:** token único por leitor destrói o cache key da CDN e transforma cada imagem em um miss. O modelo anterior contradizia a estratégia de R2 + cache imutável.
 
-### 8.2 Buffer Atômico de Views (Prevenção de Database Lock) ([ADR-0007](./adr/0007-cache-fila-rate-limit.md))
-* Em vez de executar `UPDATE mangas SET views = views + 1` a cada requisição:
-* A API executa `INCR manga:views:{id}` no Redis (ou em memória no budget).
-* Um worker periódico (ex: 5 min) usa `GETDEL` (ou script Lua `GET`+`DEL`) para **ler e remover** o contador atomicamente, evitando contagem dupla quando há mais de uma réplica.
-* O flush faz `UPSERT` em `manga_view_daily(manga_id, day, views)` e atualiza `mangas.views_all_time`; `views_daily/weekly/monthly` são derivados por consulta/refresh, não resetados em massa.
-* O worker usa lock distribuído (`pg_advisory_lock` ou lock do Asynq) e executa um último flush no shutdown gracioso.
+### 8.2 Contagem de Views por Eventos + Rollup em Lote ([ADR-0007](./adr/0007-cache-fila-rate-limit.md))
+* **Caminho de leitura:** ao abrir o reader com sucesso, a API insere um evento em `chapter_view_events(chapter_id, viewer_key, day)`. O insert é `INSERT ... ON CONFLICT DO NOTHING` e tem timeout curto; falha de analytics nunca transforma um leitor válido em `5xx`.
+* **Deduplicação:** a unique `(chapter_id, viewer_key, day)` conta no máximo uma view por leitor, capítulo e dia. Usuário autenticado usa `u:<user_id>`; anônimo usa HMAC-SHA256 de IP + User-Agent + dia, sem persistir IP bruto. O HMAC usa o segredo JWT da instância.
+* **Rollup:** o worker roda a cada 30 segundos, trava um lote com `FOR UPDATE SKIP LOCKED`, agrega por capítulo e por `(manga, dia)`, faz `UPSERT` em `manga_view_daily`, incrementa `chapters.views_count` e `mangas.views_all_time`, recalcula `views_daily/weekly/monthly` e marca os eventos como processados **na mesma transação**. Os três passos de escrita são set-based (arrays + `generate_subscripts`), então um lote de 500 eventos custa três statements, não milhares. Retry e múltiplas réplicas não duplicam contagem.
+* **Janelas e retenção:** `views_daily` é o dia UTC atual, `weekly` são 7 dias e `monthly` 30 dias, sempre derivados de `manga_view_daily`. Um refresh global a cada 15 minutos corrige a virada do dia para obras sem leitura recente. Eventos processados são removidos após 2 dias.
+* **Por que não `UPDATE mangas SET views = views + 1` por request:** isso cria contenção na mesma linha quente, gera WAL por leitura e perde deduplicação. O evento é distribuído pelo `viewer_key`; a linha diária só é tocada em lote.
 
-### 8.3 Anti-Thundering Herd com `singleflight` + Cache Curto ([ADR-0007](./adr/0007-cache-fila-rate-limit.md))
-* Quando um capítulo aguardado é lançado e centenas de leitores abrem a página no mesmo segundo:
-* Com `singleflight` em Go, **dentro de cada processo**, apenas uma consulta ao banco é executada; as demais aguardam e compartilham o resultado.
-* Em `PROFILE=scale` com N réplicas, `singleflight` sozinho ainda gera N consultas. Por isso ele é combinado com cache compartilhado (Redis) de TTL curto (5–30s) + jitter, e nunca é aplicado a respostas personalizadas.
+### 8.3 Anti-Thundering Herd — roadmap, não implementado ([ADR-0007](./adr/0007-cache-fila-rate-limit.md))
+* **Estado atual:** não há `singleflight` nem cache de resposta; cada requisição consulta o PostgreSQL.
+* Alvo: dentro de cada processo, `singleflight` faria apenas uma consulta ao banco e compartilharia o resultado entre as requisições concorrentes.
+* Com N réplicas isso ainda geraria N consultas; a mitigação planejada é cache compartilhado de TTL curto (5–30s) + jitter, nunca aplicado a respostas personalizadas.
 
 ### 8.4 Deduplicação de Imagens via Hash (Economia de até 40% de Disco) ([ADR-0010](./adr/0010-uploads-ingestao-cas.md))
 * Imagens repetidas (avisos de scanlators, créditos, capas idênticas) são analisadas por SHA-256 antes do salvamento.
 * Se a imagem já existe, apenas uma referência em `chapter_pages` é criada. `media_objects.ref_count` é incrementado; um job de GC remove objetos com `ref_count = 0` e arquivos órfãos após um período de carência.
 * O hash do cliente é apenas uma dica de deduplicação: o servidor **sempre** recalcula o SHA-256 após o upload antes de confirmar o objeto.
+
+### 8.5 Variantes de mídia sem pipeline externo
+* **Problema:** servir a página original é aceitável para leitura em tela cheia, mas capas e cards baixam arquivos grandes; um pipeline libvips obrigatório quebraria o perfil `budget`.
+* **Solução:** o worker gera variantes best-effort em Go puro, sem CGO: `thumb` (320px de largura) e `preview` (1280×4096). A geração roda a cada 2 minutos em lotes de 50, fora do request de upload.
+* **Limites de memória:** só processa originais até 24 MP e 20 MB; acima disso a mídia é marcada como `skipped` em `media_objects.variants`. Imagens já menores que a largura alvo não geram variante.
+* **Contrato:** `variants` é JSONB em `media_objects` e só é exposto no manifesto para páginas `cdn`. Páginas protegidas nunca revelam a chave do objeto nem variantes.
+* **Trade-off:** é um gerador conservador para capas e previews, não substitui CDN Image Resizing ou libvips. Se o volume de páginas justificar, o mesmo contrato aceita um worker dedicado sem mudar a API. O GC de mídia órfã remove o original **e** as chaves de variantes retornadas em `media_objects.variants`.
+
+### 8.6 Throttle de credenciais durável
+* **Por que não só memória:** um atacante distribuído entre réplicas ou um restart zera o fixed-window local. O limite em memória continua como primeira camada, mas o lock de login precisa sobreviver ao processo.
+* **Chave sem PII:** `HMAC-SHA256(JWT_SECRET, ip + NUL + email)` em `auth_login_throttles.key_hash`. IP e e-mail em claro não são persistidos.
+* **Política:** 10 falhas em 15 minutos bloqueiam a chave por 15 minutos; login bem-sucedido limpa a linha; `ErrUserBanned` também limpa. O lock é checado antes do Argon2 para não gastar CPU com credenciais já bloqueadas.
+* **Falha do banco:** o throttle é fail-open com log de warning. Um incidente no PostgreSQL não pode impedir todo login; o rate limit em memória e a borda continuam ativos.
+* **Escopo:** é um limite por IP + conta, não um limite global por IP. Limite global distribuído continua exigindo edge/WAF ou Redis (P2).
 
 ---
 
@@ -257,7 +269,7 @@ O repositório inclui suítes padronizadas de testes com **k6 (Grafana)** na pas
 
 1. **`smoke-test.js`:** Validação de estabilidade com pouca carga (5 a 10 VUs - Virtual Users).
 2. **`reader-load-test.js`:** Simulação de 500 a 2.000 leitores simultâneos folheando capítulos página a página.
-3. **`spike-test.js`:** Disparo repentino de carga (ex: 0 a 3.000 usuários em 10 segundos) para validar o comportamento do `singleflight`, do buffer de views e do rate limiter.
+3. **`spike-test.js`:** Disparo repentino de carga (ex: 0 a 3.000 usuários em 10 segundos) para validar latência do catálogo/reader, pool do PostgreSQL e rate limiter.
 
 ---
 
@@ -277,10 +289,10 @@ honbakoo/
 │   ├── storage/           # Abstração de armazenamento (Local FS / S3 API: Cloudflare R2 / B2)
 │   ├── moderation/        # Soft-delete DMCA e blacklist de hashes
 │   ├── platform/          # Config, logging, telemetry, health, graceful shutdown
-│   ├── queue/             # Fila (Asynq no scale, in-process no budget)
+│   ├── queue/             # Fila durável no PostgreSQL (FOR UPDATE SKIP LOCKED)
 │   ├── search/            # Busca textual (tsvector/trigram/pg_bigm)
-│   ├── ratelimit/         # Token bucket em memória ou Redis
-│   ├── singleflight/      # Gerenciamento de deduplicação de requisições concorrentes
+│   ├── auth/ratelimit     # Fixed-window em memória por processo (Redis é roadmap)
+│   ├── singleflight/      # Roadmap: deduplicação de requisições concorrentes
 │   └── database/          # Queries SQL nativas e código gerado pelo sqlc
 ├── api/
 │   └── openapi.yaml       # Contrato OpenAPI 3.1 (fonte de verdade)

@@ -1,6 +1,6 @@
 # ADR-0010 — Uploads presigned/diretos, validação server-side e CAS
 
-- **Status:** Aceito
+- **Status:** Aceito no design; parcialmente implementado
 - **Data:** 2026-11-06
 - **Relacionado:** `ARCHITECTURE.md` §5 e §8.4; `API_SPECIFICATION.md` §3.4; `DATABASE_SCHEMA.md` §9
 
@@ -33,8 +33,9 @@ O upload de capítulos é a operação mais pesada e mais exposta. No `budget` n
 
 ## Decisão
 
-1. `POST /uploads/presigned-url` cria `upload_sessions` com expiração e expected hash.
-2. `POST /uploads/complete` valida o objeto, recalcula SHA-256, cria `media_objects` com `status='pending'` e `ref_count=0`; só vira `ready` após validação.
+1. *(Planejado)* `POST /uploads/presigned-url` cria `upload_sessions` com expiração e expected hash.
+2. *(Planejado)* `POST /uploads/complete` valida o objeto, recalcula SHA-256, cria `media_objects` com `status='pending'` e `ref_count=0`; só vira `ready` após validação.
+   **Implementação atual:** upload multipart direto em `POST /api/v1/editorial/chapters/{id}/pages` e import de URLs em `POST /api/v1/editorial/chapters/{id}/pages/import`. O CAS, magic bytes, limite de pixels, strip de EXIF e blacklist de hash já rodam nesse fluxo; `upload_sessions`/presigned continuam roadmap.
 3. `media_objects` tem `storage_provider`, `storage_key`, `byte_size`, `width/height`, `ref_count`, `variants` e `status`.
 4. `chapter_pages` referencia `media_objects`; o `ref_count` é mantido na mesma transação.
 5. GC remove `status='pending'` expirado e `ref_count=0` após carência.
