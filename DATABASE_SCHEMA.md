@@ -4,7 +4,7 @@
 > **Migration Runner:** Goose (`embed.FS`)  
 > **Query Engine:** `sqlc` + `pgx/v5` (Zero ORM, SQL Nativo compilado fortemente tipado)  
 > **Identificadores:** UUIDv7 (Ordenados temporalmente, sem fragmentação de B-Tree)  
-> **Migrations:** `00001_universal_schema.sql` (DDL base abaixo), `00002_optimize_triggers_and_indexes.sql`, `00003_hardening.sql`, `00004_chapter_view_events.sql`, `00005_auth_login_throttles.sql` e `00006_age_verification_status.sql`.
+> **Migrations:** `00001_universal_schema.sql` (DDL base abaixo), `00002_optimize_triggers_and_indexes.sql`, `00003_hardening.sql`, `00004_chapter_view_events.sql`, `00005_auth_login_throttles.sql`, `00006_age_verification_status.sql`, `00007_updates_feed_index.sql`, `00008_rich_community_and_discovery.sql`, `00009_comment_media_only_check.sql`, `00010_social_profiles_and_notifications.sql` e `00011_editorial_ownership_and_suggestions.sql` (incrementais resumidas na [§3.1](#31-migrations-incrementais-00008--00011)).
 > **Escopo Universal:** Suporte nativo a Mangá, Doujinshi (Galerias/One-shot), Manhwa (Webtoons verticais), Anime e Anime-H (Vídeo HLS/Embeds), com **I18n Multi-idiomas** e **Metadados Editoriais (Artistas, Roteiristas, Revistas/Magazines e Editoras)**.
 
 ---
@@ -12,30 +12,30 @@
 ## 1. Princípios da Modelagem Universal, I18n & Metadados Editoriais
 
 1. **Pessoas e Criadores (Autores / Roteiristas e Artistas / Ilustradores):**
-   * Uma obra pode ter múltiplos criadores com papéis distintos (ex: *Story/Writer*, *Art/Illustrator* ou *Both*).
-   * Perfis de criadores possuem slug, biografia localizada, redes sociais e vinculação com todas as obras que participaram.
+   - Uma obra pode ter múltiplos criadores com papéis distintos (ex: _Story/Writer_, _Art/Illustrator_ ou _Both_).
+   - Perfis de criadores possuem slug, biografia localizada, redes sociais e vinculação com todas as obras que participaram.
 2. **Revistas de Serialização & Editoras (Magazines & Publishers):**
-   * Obras seriadas (Mangá/Manhwa/Manhua) pertencem a uma revista (*Weekly Shonen Jump*, *Young Comic*, *Webtoon Line*, *KakaoPage*) e a uma editora (*Shueisha*, *Kadokawa*, etc.).
-   * Revistas possuem periodicidade (`weekly`, `monthly`, `digital_webtoon`).
+   - Obras seriadas (Mangá/Manhwa/Manhua) pertencem a uma revista (_Weekly Shonen Jump_, _Young Comic_, _Webtoon Line_, _KakaoPage_) e a uma editora (_Shueisha_, _Kadokawa_, etc.).
+   - Revistas possuem periodicidade (`weekly`, `monthly`, `digital_webtoon`).
 3. **Internacionalização Real (I18n):**
-   * Obras possuem títulos e sinopses localizados por idioma (`manga_localizations`) com fallback automático para o título original.
-   * Tags canônicas possuem nomes traduzidos por idioma (`tag_localizations`).
-   * Capítulos, episódios e legendas são estritamente atrelados a códigos de idioma ISO/BCP 47 (`pt-br`, `en`, `ja`, etc.).
+   - Obras possuem títulos e sinopses localizados por idioma (`manga_localizations`) com fallback automático para o título original.
+   - Tags canônicas possuem nomes traduzidos por idioma (`tag_localizations`).
+   - Capítulos, episódios e legendas são estritamente atrelados a códigos de idioma ISO/BCP 47 (`pt-br`, `en`, `ja`, etc.).
 4. **Flexibilidade Camaleônica (Manga, Webtoon, Doujinshi, Anime):**
-   * Obras podem ser **séries tradicionais**, **galerias one-shot** (doujinshis com leitura direta de páginas) ou **séries de animação** (episódios de vídeo HLS ou embeds).
+   - Obras podem ser **séries tradicionais**, **galerias one-shot** (doujinshis com leitura direta de páginas) ou **séries de animação** (episódios de vídeo HLS ou embeds).
 5. **Hiper-otimização para Tags (Estilo NHentai):**
-   * Vetor de tags `tag_ids INT[]` com índice GIN para filtros de inclusão em poucos milissegundos; filtros de exclusão (`NOT @>`) são pós-filtro e exigem medição com `EXPLAIN (ANALYZE, BUFFERS)`.
+   - Vetor de tags `tag_ids INT[]` com índice GIN para filtros de inclusão em poucos milissegundos; filtros de exclusão (`NOT @>`) são pós-filtro e exigem medição com `EXPLAIN (ANALYZE, BUFFERS)`.
 6. **Comunidade Hierárquica com LTree e Profundidade Limitada:**
-   * Comentários aninhados até 5 níveis, com `parent_id` explícito e `path` `ltree` recuperado em uma única query.
+   - Comentários aninhados até 5 níveis, com `parent_id` explícito e `path` `ltree` recuperado em uma única query.
 7. **Autenticação e Entitlement Separados:**
-   * `user_role` não contém `vip`; o entitlement é derivado de `users.vip_until` e `vip_subscriptions`.
-   * Refresh tokens são rotativos por família (`family_id`, `replaced_by`, `revoked_at`), com detecção de reuso.
+   - `user_role` não contém `vip`; o entitlement é derivado de `users.vip_until` e `vip_subscriptions`.
+   - Refresh tokens são rotativos por família (`family_id`, `replaced_by`, `revoked_at`), com detecção de reuso.
 8. **Confiabilidade de Escrita:**
-   * Idempotência durável (`idempotency_keys`), webhooks deduplicados (`webhook_events`), denúncias (`content_reports`) e auditoria (`audit_log`).
-   * Contadores de rating/favoritos/reações são mantidos por trigger na mesma transação.
+   - Idempotência durável (`idempotency_keys`), webhooks deduplicados (`webhook_events`), denúncias (`content_reports`) e auditoria (`audit_log`).
+   - Contadores de rating/favoritos/reações são mantidos por trigger na mesma transação.
 9. **Automação com Credenciais Rastreáveis:**
-   * API keys de ingestão/admin ficam em `api_keys` com hash, escopo, expiração e revogação ([ADR-0014](./adr/0014-api-keys-automacao.md)).
-   * O ator da ingestão é resolvido para `user_id` + `api_key_id` e registrado em `audit_log`.
+   - API keys de ingestão/admin ficam em `api_keys` com hash, escopo, expiração e revogação ([ADR-0014](./adr/0014-api-keys-automacao.md)).
+   - O ator da ingestão é resolvido para `user_id` + `api_key_id` e registrado em `audit_log`.
 
 ---
 
@@ -78,20 +78,24 @@ erDiagram
 
     TAGS ||--o{ TAG_LOCALIZATIONS : has_translations
     TAGS ||--o{ MANGAS : "tag_ids GIN indexed"
-    
+
     MANGAS ||--o{ MANGA_LOCALIZATIONS : has_translations
     MANGAS ||--o{ CHAPTERS : contains
     MANGAS ||--o{ USER_FAVORITES : favorited_in
     MANGAS ||--o{ READING_HISTORY : tracked_in
     MANGAS ||--o{ MANGA_RATINGS : rated_in
     MANGAS ||--o{ MANGA_VIEW_DAILY : aggregates
-    
+    MANGAS ||--o{ WORK_EDIT_SUGGESTIONS : receives_suggestions
+    USERS ||--o{ MANGAS : created_by
+    USERS ||--o{ CHAPTERS : uploaded_by
+    USERS ||--o{ WORK_EDIT_SUGGESTIONS : authors_or_reviews
+
     CHAPTERS ||--o{ CHAPTER_PAGES : has_pages
     CHAPTERS ||--o{ EPISODE_SOURCES : has_videos
     CHAPTERS ||--o{ EPISODE_SUBTITLES : has_subtitles
     CHAPTERS ||--o{ COMMENTS : receives
     CHAPTERS ||--o{ READING_HISTORY : last_read_in
-    
+
     MEDIA_OBJECTS ||--o{ CHAPTER_PAGES : references
     UPLOAD_SESSIONS ||--o{ MEDIA_OBJECTS : produces
     COMMENTS ||--o{ COMMENTS : replies
@@ -158,9 +162,23 @@ erDiagram
         integer rating_count
         boolean is_published
         boolean is_dmca_blocked
+        uuid created_by FK "nullable; criador (00011)"
         timestamptz published_at
         timestamptz created_at
         timestamptz updated_at
+    }
+
+    WORK_EDIT_SUGGESTIONS {
+        uuid id PK "UUIDv7"
+        uuid manga_id FK "cascade"
+        uuid author_id FK "nullable (set null)"
+        jsonb payload "whitelist de campos editáveis"
+        text note "<= 1000 chars"
+        varchar status "pending, approved, rejected"
+        uuid reviewer_id FK "nullable"
+        text review_note "<= 1000 chars"
+        timestamptz created_at
+        timestamptz reviewed_at
     }
 
     MANGA_LOCALIZATIONS {
@@ -207,6 +225,7 @@ erDiagram
         boolean is_published
         boolean is_dmca_blocked
         timestamptz published_at "fonte do feed /updates"
+        uuid uploaded_by FK "nullable; dono do upload (00011)"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -589,7 +608,7 @@ CREATE TABLE users (
     avatar_url VARCHAR(512),
     email_verified_at TIMESTAMPTZ,           -- NULL até confirmar o e-mail
     last_login_at TIMESTAMPTZ,
-    
+
     -- AFERIÇÃO DE IDADE E PROTEÇÃO DE MENORES (ECA Digital - Lei nº 15.211/2025 / ANPD)
     age_verified_at TIMESTAMPTZ,            -- Data da confirmação de maioridade por método confiável
     age_verification_method VARCHAR(64),    -- 'gov_br_token', 'oidc_age_provider', etc. (Sem autodeclaração simplória)
@@ -598,7 +617,7 @@ CREATE TABLE users (
         CHECK (age_verification_status IN ('unverified', 'pending', 'verified', 'rejected', 'expired')),
     age_verification_expires_at TIMESTAMPTZ,
     age_verification_rejected_reason TEXT,
-    
+
     -- Entitlement VIP denormalizado para leitura rápida; fonte de verdade: vip_subscriptions.
     vip_until TIMESTAMPTZ,
     is_banned BOOLEAN NOT NULL DEFAULT FALSE,
@@ -749,7 +768,7 @@ CREATE TABLE mangas (
     id UUID PRIMARY KEY,                    -- UUIDv7
     publisher_id UUID REFERENCES publishers(id) ON DELETE SET NULL,
     magazine_id UUID REFERENCES magazines(id) ON DELETE SET NULL,
-    
+
     original_title VARCHAR(255) NOT NULL,   -- Título original/canônico
     original_language VARCHAR(10) NOT NULL REFERENCES languages(code),
     alt_titles TEXT[] DEFAULT '{}',         -- Variações de títulos (romanizado, oficial, etc.)
@@ -758,36 +777,36 @@ CREATE TABLE mangas (
     format content_format NOT NULL DEFAULT 'manga',
     status publication_status NOT NULL DEFAULT 'ongoing',
     reading_direction reading_direction NOT NULL DEFAULT 'right_to_left',
-    
+
     -- MODO GALERIA / ONE-SHOT (Para doujinshis e galerias onde o leitor abre as páginas direto)
     is_gallery BOOLEAN NOT NULL DEFAULT FALSE,
     is_nsfw BOOLEAN NOT NULL DEFAULT TRUE,
     is_vip_exclusive BOOLEAN NOT NULL DEFAULT FALSE,    -- Obra inteiramente exclusiva para assinantes VIP
     cover_url VARCHAR(512) NOT NULL,
-    
+
     -- TAGS HIPER-OTIMIZADAS VIA ARRAY + ÍNDICE GIN
     tag_ids INT[] NOT NULL DEFAULT '{}',
-    
+
     -- Contadores materializados para leitura rápida; weekly/monthly são
     -- recalculados a partir de manga_view_daily (fonte de verdade diária).
     views_all_time BIGINT NOT NULL DEFAULT 0,
     views_monthly BIGINT NOT NULL DEFAULT 0,
     views_weekly BIGINT NOT NULL DEFAULT 0,
     views_daily BIGINT NOT NULL DEFAULT 0,
-    
+
     favorites_count INT NOT NULL DEFAULT 0,
     rating_score NUMERIC(4, 2) NOT NULL DEFAULT 0.00 CHECK (rating_score >= 0 AND rating_score <= 10),
     rating_count INT NOT NULL DEFAULT 0,
-    
+
     -- PROVENIÊNCIA E CONFORMIDADE DE DIREITOS
     provenance provenance_type NOT NULL DEFAULT 'scanlator_upload',
     source_attribution TEXT,                 -- Licença, link original ou autorização
-    
+
     -- MODERAÇÃO, DMCA E QUARENTENA DE EMERGÊNCIA
     is_published BOOLEAN NOT NULL DEFAULT TRUE,
     is_dmca_blocked BOOLEAN NOT NULL DEFAULT FALSE,
     is_emergency_quarantined BOOLEAN NOT NULL DEFAULT FALSE, -- Bloqueio de emergência (ex: CSAM/Material Ilegal)
-    
+
     published_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -915,27 +934,27 @@ CREATE TABLE chapters (
     -- RESTRICT evita que apagar um grupo colida com uma release solo
     -- (a constraint abaixo usa NULLS NOT DISTINCT).
     group_id UUID REFERENCES scanlation_groups(id) ON DELETE RESTRICT,
-    
+
     chapter_number NUMERIC(7, 2) NOT NULL DEFAULT 1, -- 1, 10.5, etc.
     volume_number VARCHAR(16),
     title VARCHAR(255),
     language_code VARCHAR(10) NOT NULL REFERENCES languages(code) ON DELETE RESTRICT,
-    
+
     -- TIPO DE MÍDIA: 'image_pages' (mangá/galeria) OU 'video_stream' (anime)
     media_type media_type NOT NULL DEFAULT 'image_pages',
-    
+
     -- ACESSO ANTECIPADO / VIP / EXCLUSIVIDADE (ADR-0016)
     is_vip_early_access BOOLEAN NOT NULL DEFAULT FALSE,
     is_vip_exclusive BOOLEAN NOT NULL DEFAULT FALSE,    -- Paywall permanente (ex: uncensored/premium)
     available_public_at TIMESTAMPTZ,                    -- Liberação para usuários free se for early access
     has_uncensored_version BOOLEAN NOT NULL DEFAULT FALSE,
-    
+
     views_count BIGINT NOT NULL DEFAULT 0,
     is_published BOOLEAN NOT NULL DEFAULT TRUE,
     is_dmca_blocked BOOLEAN NOT NULL DEFAULT FALSE,
     -- Quando o capítulo ficou público (fonte do feed /updates).
     published_at TIMESTAMPTZ,
-    
+
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -1021,14 +1040,14 @@ CREATE TABLE episode_sources (
     id UUID PRIMARY KEY,                    -- UUIDv7
     chapter_id UUID NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
     source_type video_source_type NOT NULL DEFAULT 'direct_hls',
-    
+
     -- Ex: '1080p', '720p', '480p', 'auto'
     resolution VARCHAR(16) NOT NULL DEFAULT '1080p',
-    
+
     -- URL do stream (.m3u8, .mp4) ou URL de iframe de player externo
     stream_url VARCHAR(1024) NOT NULL,
     server_name VARCHAR(64) NOT NULL DEFAULT 'Main Server', -- 'Streamtape', 'Dood', 'HLS Local'
-    
+
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX idx_episode_sources_chapter ON episode_sources(chapter_id);
@@ -1343,14 +1362,71 @@ DROP TYPE IF EXISTS tag_category;
 DROP TYPE IF EXISTS user_role;
 ```
 
+### 3.1 Migrations incrementais (00008 – 00011)
+
+O DDL acima é a base (`00001`). As migrations seguintes alteram o schema assim:
+
+| Migration                                   | Mudanças                                                                                                                                                                                                                                                                                                                                         |
+| :------------------------------------------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `00008_rich_community_and_discovery`        | `comments` ganha `manga_id` (comentário na obra), `is_spoiler`, `attachments` jsonb e `reaction_counts` jsonb; `chk_comments_target` exige `manga_id` ou `chapter_id`. Novas tabelas `comment_emoji_reactions` e `chapter_page_reactions`. Índices `idx_comments_manga`, `idx_chapters_published_manga_lang` e `idx_manga_view_daily_manga_day`. |
+| `00009_comment_media_only_check`            | `comments_content_check` passa a aceitar comentário só com mídia (texto vazio + anexo).                                                                                                                                                                                                                                                          |
+| `00010_social_profiles_and_notifications`   | `users` ganha `display_name`, `banner_url`, `bio`, `favorite_genres` e as flags de privacidade `show_favorites`/`show_ratings`/`show_activity`. Novas tabelas `user_follows`, `profile_wall_posts` e `user_notifications`.                                                                                                                       |
+| `00011_editorial_ownership_and_suggestions` | Propriedade editorial e fila moderada de sugestões ([ADR-0018](./adr/0018-permissoes-editoriais-e-sugestoes.md)); DDL abaixo.                                                                                                                                                                                                                    |
+
+```sql
+-- 00011: dono da obra (obras sem grupo) e dono do capítulo (uploader).
+ALTER TABLE mangas
+    ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+ALTER TABLE chapters
+    ADD COLUMN IF NOT EXISTS uploaded_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+-- Backfill: o uploader da mídia da primeira página vira o dono do capítulo.
+UPDATE chapters c
+SET uploaded_by = sub.uploaded_by
+FROM (
+    SELECT DISTINCT ON (cp.chapter_id) cp.chapter_id, mo.uploaded_by
+    FROM chapter_pages cp
+    JOIN media_objects mo ON mo.id = cp.media_id
+    WHERE mo.uploaded_by IS NOT NULL
+    ORDER BY cp.chapter_id, cp.page_number
+) sub
+WHERE c.id = sub.chapter_id AND c.uploaded_by IS NULL;
+
+-- Sugestões de edição de metadados; aprovação aplica o payload via ApplyWorkEdit.
+CREATE TABLE IF NOT EXISTS work_edit_suggestions (
+    id UUID PRIMARY KEY,
+    manga_id UUID NOT NULL REFERENCES mangas(id) ON DELETE CASCADE,
+    author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    payload JSONB NOT NULL CHECK (jsonb_typeof(payload) = 'object' AND payload <> '{}'::jsonb),
+    note TEXT NOT NULL DEFAULT '' CHECK (char_length(note) <= 1000),
+    status VARCHAR(16) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+    reviewer_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    review_note TEXT NOT NULL DEFAULT '' CHECK (char_length(review_note) <= 1000),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    reviewed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_work_edit_suggestions_status
+    ON work_edit_suggestions(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_edit_suggestions_manga
+    ON work_edit_suggestions(manga_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_edit_suggestions_author
+    ON work_edit_suggestions(author_id, created_at DESC);
+-- Uma sugestão pendente por autor por obra; a troca de status usa WHERE status = 'pending'.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_work_edit_suggestions_pending
+    ON work_edit_suggestions(manga_id, author_id) WHERE status = 'pending';
+```
+
 ---
 
 ## 4. Queries de Alto Rendimento com `sqlc` (com Criadores e Revistas)
 
 ### 4.1 Recuperação de Obra com Criadores (Roteirista & Artista) e Revista
+
 ```sql
 -- name: GetMangaDetails :one
-SELECT 
+SELECT
     m.id,
     COALESCE(ml.title, m.original_title) AS display_title,
     COALESCE(ml.description, '') AS display_description,
@@ -1369,16 +1445,16 @@ SELECT
     mag.slug AS magazine_slug,
     pub.name AS publisher_name
 FROM mangas m
-LEFT JOIN manga_localizations ml 
+LEFT JOIN manga_localizations ml
     ON ml.manga_id = m.id AND ml.language_code = $2
 LEFT JOIN magazines mag ON mag.id = m.magazine_id
 LEFT JOIN publishers pub ON pub.id = m.publisher_id
-WHERE m.slug = $1 
-  AND m.is_published = TRUE 
+WHERE m.slug = $1
+  AND m.is_published = TRUE
   AND m.is_dmca_blocked = FALSE;
 
 -- name: GetMangaCreators :many
-SELECT 
+SELECT
     c.id, c.name, c.native_name, c.slug, mc.role
 FROM manga_creators mc
 JOIN creators c ON c.id = mc.creator_id
@@ -1386,11 +1462,12 @@ WHERE mc.manga_id = $1;
 ```
 
 ### 4.2 Listagem de Obras por Artista/Autor com Paginação Keyset
+
 ```sql
 -- name: GetMangasByCreator :many
 -- Cursor opaco = (views_all_time, id) do último item da página anterior.
 -- Na primeira página, a API envia o teto: (9223372036854775807, 'ffffffff-ffff-7fff-bfff-ffffffffffff').
-SELECT 
+SELECT
     m.id, m.original_title, m.slug, m.cover_url, m.format, mc.role
 FROM mangas m
 JOIN manga_creators mc ON mc.manga_id = m.id
@@ -1401,4 +1478,5 @@ WHERE mc.creator_id = $1
 ORDER BY m.views_all_time DESC, m.id DESC
 LIMIT $4;
 ```
+
 > `LIMIT/OFFSET` degrada linearmente e pode pular/duplicar itens sob escrita concorrente. Keyset mantém o custo estável e é a única paginação usada nas rotas públicas.

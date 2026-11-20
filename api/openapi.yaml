@@ -40,6 +40,8 @@ paths:
       operationId: getLiveness
       summary: Liveness probe
       responses:
+        '4XX':
+          description: Client error
         '200':
           description: Process is alive
           content:
@@ -53,6 +55,8 @@ paths:
       operationId: getReadiness
       summary: Readiness probe (checks PostgreSQL)
       responses:
+        '4XX':
+          description: Client error
         '200':
           description: Dependencies are healthy
           content:
@@ -83,6 +87,8 @@ paths:
       operationId: getPublicConfig
       summary: Public runtime capabilities of this deployment
       responses:
+        '4XX':
+          description: Client error
         '200':
           description: Public configuration
           content:
@@ -197,6 +203,8 @@ paths:
               properties:
                 refresh_token: { type: string }
       responses:
+        '4XX':
+          description: Client error
         '204':
           description: Session revoked
 
@@ -341,12 +349,47 @@ paths:
                   type: string
                   enum: [government_id, payment_card, facial_estimation]
       responses:
-        '204':
+        '200':
           description: Age verification recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgeVerificationResult'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Unsupported verification method
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '501':
           description: Verification provider not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/auth/age-verification:
+    get:
+      tags: [Auth]
+      operationId: getAgeVerification
+      summary: Get the effective age verification status
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Current age verification state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgeVerificationStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /api/v1/auth/change-password:
     post:
@@ -403,6 +446,8 @@ paths:
       security:
         - BearerAuth: []
       responses:
+        '4XX':
+          description: Client error
         '200':
           description: API keys
           content:
@@ -544,7 +589,18 @@ paths:
         - name: lang
           in: query
           schema: { type: string, default: pt-br }
+        - name: category
+          in: query
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [popular, az] }
+        - name: q
+          in: query
+          schema: { type: string }
       responses:
+        '4XX':
+          description: Client error
         '200':
           description: Tags
           content:
@@ -553,6 +609,60 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Tag'
+
+  /api/v1/mangas/facets:
+    get:
+      tags: [Catalog]
+      operationId: getCatalogFacets
+      summary: Aggregate facet counts for catalog filtering
+      responses:
+        '200':
+          description: Catalog facets
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /api/v1/mangas/taxonomies/{kind}:
+    get:
+      tags: [Catalog]
+      operationId: listTaxonomy
+      summary: List taxonomy directory entries with counts and sorting
+      parameters:
+        - name: kind
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [tags, parodies, characters, circles, artists, groups, languages, magazines]
+        - name: lang
+          in: query
+          schema: { type: string, default: pt-br }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [popular, az], default: popular }
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: letter
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Taxonomy directory
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
 
   /api/v1/mangas/favorites:
     get:
@@ -676,6 +786,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Id'
       responses:
+        '4XX':
+          description: Client error
         '204':
           description: Rating removed
 
@@ -689,6 +801,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Id'
       responses:
+        '4XX':
+          description: Client error
         '204':
           description: Added
     delete:
@@ -700,6 +814,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Id'
       responses:
+        '4XX':
+          description: Client error
         '204':
           description: Removed
 
@@ -721,7 +837,13 @@ paths:
               properties:
                 chapter_id: { type: string, format: uuid }
                 page_number: { type: integer, minimum: 1 }
+                video_position_seconds:
+                  type: integer
+                  minimum: 0
+                  description: Playback position for video chapters; ignored for image chapters.
       responses:
+        '4XX':
+          description: Client error
         '204':
           description: Progress stored
     delete:
@@ -733,6 +855,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Id'
       responses:
+        '4XX':
+          description: Client error
         '204':
           description: Removed
 
@@ -758,6 +882,51 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ChapterReader'
+        '403':
+          description: Age verification or VIP subscription required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/chapters/{id}/pages/{page}/media:
+    get:
+      tags: [Reader]
+      operationId: getChapterPageMedia
+      summary: Stream one chapter page
+      description: |
+        Serves the image bytes for a page that cannot be exposed through the
+        public CDN, such as NSFW or VIP-gated chapters. The response is private
+        and must not be stored by shared caches. Public chapters use the CDN URL
+        returned in the reader payload instead of this endpoint.
+      security:
+        - {}
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: page
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+        - name: token
+          in: query
+          required: false
+          description: Short-lived capability returned in the reader manifest for protected pages. Alternative to the Bearer header for browser image tags.
+          schema: { type: string }
+      responses:
+        '200':
+          description: Page image
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+            image/png:
+              schema: { type: string, format: binary }
+            image/webp:
+              schema: { type: string, format: binary }
+            image/gif:
+              schema: { type: string, format: binary }
         '403':
           description: Age verification or VIP subscription required
           content:
@@ -813,6 +982,8 @@ paths:
           in: query
           schema: { type: string }
       responses:
+        '4XX':
+          description: Client error
         '200':
           description: Comments
           headers:
@@ -849,6 +1020,158 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Comment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/v1/community/mangas/{id}/comments:
+    get:
+      tags: [Community]
+      operationId: listMangaComments
+      summary: List manga-level and aggregated chapter comments
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: sort
+          in: query
+          schema: { type: string, enum: [top, newest, oldest, discussed] }
+        - name: scope
+          in: query
+          schema: { type: string, enum: [all, manga, chapter] }
+        - name: chapter_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: hide_spoilers
+          in: query
+          schema: { type: boolean }
+        - name: has_media
+          in: query
+          schema: { type: boolean }
+        - name: limit
+          in: query
+          schema: { type: integer }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Manga comments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Comment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+    post:
+      tags: [Community]
+      operationId: postMangaComment
+      summary: Post a manga comment with optional spoilers and media attachments
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content: { type: string, maxLength: 2000 }
+                parent_id: { type: string, format: uuid }
+                is_spoiler: { type: boolean }
+                attachments:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: true
+      responses:
+        '201':
+          description: Comment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/v1/community/comments/{id}/emoji:
+    post:
+      tags: [Community]
+      operationId: toggleCommentEmoji
+      summary: Toggle an emoji reaction on a comment
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emoji]
+              properties:
+                emoji: { type: string }
+      responses:
+        '200':
+          description: Updated reaction summary
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/v1/community/chapters/{id}/page-reactions:
+    get:
+      tags: [Community]
+      operationId: listChapterPageReactions
+      summary: List aggregated per-page reactions for a chapter
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Per-page reactions
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/community/chapters/{id}/pages/{page}/react:
+    post:
+      tags: [Community]
+      operationId: toggleChapterPageReaction
+      summary: Toggle a reaction on a specific chapter page
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: page
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reaction]
+              properties:
+                reaction: { type: string }
+      responses:
+        '200':
+          description: Updated page reaction summary
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
         '400':
           $ref: '#/components/responses/BadRequest'
 
@@ -890,6 +1213,8 @@ paths:
               properties:
                 is_like: { type: boolean }
       responses:
+        '4XX':
+          description: Client error
         '204':
           description: Reaction stored
     delete:
@@ -901,6 +1226,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Id'
       responses:
+        '4XX':
+          description: Client error
         '204':
           description: Reaction removed
 
@@ -992,8 +1319,379 @@ paths:
         '409':
           description: Report already resolved
 
+  /api/v1/community/users/search:
+    get:
+      tags: [Community]
+      operationId: searchUsers
+      summary: Search public user profiles by username or display name
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Matching users
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /api/v1/community/users/me/profile:
+    patch:
+      tags: [Community]
+      operationId: updateMyProfile
+      summary: Update current user profile metadata and privacy settings
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/community/users/me/avatar:
+    post:
+      tags: [Community]
+      operationId: uploadAvatar
+      summary: Upload profile avatar image
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: Avatar uploaded
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/community/users/me/banner:
+    post:
+      tags: [Community]
+      operationId: uploadBanner
+      summary: Upload profile banner image
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: Banner uploaded
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/community/users/{username}/profile:
+    get:
+      tags: [Community]
+      operationId: getPublicProfile
+      summary: Fetch public user profile, favorites, ratings, comments and wall
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Public profile
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/community/users/{username}/followers:
+    get:
+      tags: [Community]
+      operationId: listUserFollowers
+      summary: List followers of a user
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Followers list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/community/users/{username}/following:
+    get:
+      tags: [Community]
+      operationId: listUserFollowing
+      summary: List users followed by a user
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Following list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/community/users/{username}/follow:
+    post:
+      tags: [Community]
+      operationId: toggleFollowUser
+      summary: Follow or unfollow a user
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Updated follow state
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/community/users/{username}/wall:
+    post:
+      tags: [Community]
+      operationId: createWallPost
+      summary: Leave a message on a user profile wall
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+      responses:
+        '201':
+          description: Wall post created
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/community/wall/{id}:
+    delete:
+      tags: [Community]
+      operationId: deleteWallPost
+      summary: Delete a profile wall post
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Deleted
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/community/notifications:
+    get:
+      tags: [Community]
+      operationId: listNotifications
+      summary: List notifications for the signed-in user
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: User notifications
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/community/notifications/read:
+    post:
+      tags: [Community]
+      operationId: markNotificationsRead
+      summary: Mark notifications as read
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notification_id: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Marked as read
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   # ------------------------------------------------------------ Editorial ----
+  /api/v1/editorial/dashboard:
+    get:
+      tags: [Editorial]
+      operationId: getStudioDashboard
+      summary: Studio dashboard metrics, drafts and recent works
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Studio dashboard
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/editorial/media/cover:
+    post:
+      tags: [Editorial]
+      operationId: uploadCoverMedia
+      summary: Upload a manga cover image for Editorial Studio
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201':
+          description: Cover uploaded
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/editorial/groups/{id}:
+    patch:
+      tags: [Editorial]
+      operationId: updateGroup
+      summary: Update scanlation group details
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Group updated
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/v1/editorial/groups:
+    get:
+      tags: [Editorial]
+      operationId: listEditorialGroups
+      summary: List scanlation groups the caller belongs to (or all groups for staff)
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Scanlation groups
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string, format: uuid }
+                    name: { type: string }
+                    slug: { type: string }
+                    description: { type: string }
+                    role: { type: string }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     post:
       tags: [Editorial]
       operationId: createGroup
@@ -1025,6 +1723,26 @@ paths:
           $ref: '#/components/responses/BadRequest'
 
   /api/v1/editorial/groups/{id}/members:
+    get:
+      tags: [Editorial]
+      operationId: listGroupMembers
+      summary: List members of a scanlation group
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Group members
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     post:
       tags: [Editorial]
       operationId: addGroupMember
@@ -1055,7 +1773,65 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /api/v1/editorial/groups/{id}/members/{user_id}:
+    delete:
+      tags: [Editorial]
+      operationId: removeGroupMember
+      summary: Remove a member from a scanlation group
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Member removed
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/v1/editorial/mangas:
+    get:
+      tags: [Editorial]
+      operationId: listStudioMangas
+      summary: List editorial works including drafts
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: published
+          in: query
+          schema: { type: string }
+        - name: format
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer }
+        - name: offset
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Studio mangas
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     post:
       tags: [Editorial]
       operationId: createManga
@@ -1083,6 +1859,31 @@ paths:
                 $ref: '#/components/schemas/Error'
 
   /api/v1/editorial/mangas/{id}:
+    get:
+      tags: [Editorial]
+      operationId: getStudioManga
+      summary: Fetch full editable editorial details for a work
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Studio manga detail
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  viewer_permissions:
+                    $ref: '#/components/schemas/WorkPermissions'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
     patch:
       tags: [Editorial]
       operationId: updateManga
@@ -1116,6 +1917,9 @@ paths:
       tags: [Editorial]
       operationId: deleteManga
       summary: Delete a work
+      description: >-
+        Staff only, or the leader of the sole maintaining group (or the creator
+        of an ungrouped work) when no chapter belongs to anyone else.
       security:
         - BearerAuth: []
       parameters:
@@ -1130,7 +1934,219 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /api/v1/editorial/mangas/{id}/permissions:
+    get:
+      tags: [Editorial]
+      operationId: getWorkPermissions
+      summary: What the caller may do with a work (UI gating)
+      description: >-
+        Resolved by the central editorial policy (staff, creation policy,
+        group role, API-key group binding and ownership). Never returns 403.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Viewer permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkPermissions'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/editorial/mangas/{id}/suggestions:
+    post:
+      tags: [Editorial]
+      operationId: createEditSuggestion
+      summary: Propose a metadata change for moderation
+      description: >-
+        For users who cannot edit the work directly. Maintainers get 409
+        `can_edit_directly`. One pending suggestion per author and work.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEditSuggestionRequest'
+      responses:
+        '201':
+          description: Suggestion queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EditSuggestion'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Already pending, or caller can edit directly
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Too many pending suggestions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/editorial/suggestions:
+    get:
+      tags: [Editorial]
+      operationId: listEditSuggestions
+      summary: Review queue or the caller's own suggestions
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: scope
+          in: query
+          schema: { type: string, enum: [review, mine], default: review }
+        - name: status
+          in: query
+          schema: { type: string, enum: [pending, approved, rejected, all], default: pending }
+        - name: manga_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Suggestions, newest first; pending review items include `current` values
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EditSuggestion'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/editorial/suggestions/{id}:
+    delete:
+      tags: [Editorial]
+      operationId: withdrawEditSuggestion
+      summary: Withdraw one's own pending suggestion
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Withdrawn
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/editorial/suggestions/{id}/approve:
+    post:
+      tags: [Editorial]
+      operationId: approveEditSuggestion
+      summary: Approve and apply a pending suggestion
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewEditSuggestionRequest'
+      responses:
+        '200':
+          description: Approved suggestion
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EditSuggestion'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Already reviewed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/editorial/suggestions/{id}/reject:
+    post:
+      tags: [Editorial]
+      operationId: rejectEditSuggestion
+      summary: Reject a pending suggestion
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewEditSuggestionRequest'
+      responses:
+        '200':
+          description: Rejected suggestion
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EditSuggestion'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Already reviewed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/editorial/mangas/{id}/chapters:
+    get:
+      tags: [Editorial]
+      operationId: listStudioChapters
+      summary: List all chapters for a work including unpublished drafts
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Studio chapter list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+                  properties:
+                    viewer_permissions:
+                      $ref: '#/components/schemas/ChapterPermissions'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
     post:
       tags: [Editorial]
       operationId: createChapter
@@ -1146,6 +2162,8 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateChapterRequest'
       responses:
+        '4XX':
+          description: Client error
         '201':
           description: Chapter created
           content:
@@ -1169,6 +2187,8 @@ paths:
             schema:
               $ref: '#/components/schemas/UpdateChapterRequest'
       responses:
+        '4XX':
+          description: Client error
         '200':
           description: Updated chapter
           content:
@@ -1184,10 +2204,34 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Id'
       responses:
+        '4XX':
+          description: Client error
         '204':
           description: Deleted
 
   /api/v1/editorial/chapters/{id}/pages:
+    get:
+      tags: [Editorial]
+      operationId: listStudioChapterPages
+      summary: List chapter pages for editorial management including draft chapters
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Studio chapter pages
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
     post:
       tags: [Editorial]
       operationId: uploadPage
@@ -1247,9 +2291,11 @@ paths:
                 urls:
                   type: array
                   minItems: 1
-                  maxItems: 200
+                  maxItems: 50
                   items: { type: string, format: uri }
       responses:
+        '4XX':
+          description: Client error
         '201':
           description: Pages imported
           content:
@@ -1473,6 +2519,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Id'
       responses:
+        '4XX':
+          description: Client error
         '204':
           description: Unbanned
 
@@ -1592,6 +2640,33 @@ components:
         message: { type: string }
         code: { type: string }
 
+    AgeVerificationStatus:
+      type: object
+      required: [status, required]
+      properties:
+        status:
+          type: string
+          enum: [unverified, pending, verified, rejected, expired]
+        method: { type: string }
+        verified_at: { type: [string, "null"], format: date-time }
+        expires_at: { type: [string, "null"], format: date-time }
+        rejected_reason: { type: string }
+        required:
+          type: boolean
+          description: Whether this deployment requires age verification for NSFW content.
+
+    AgeVerificationResult:
+      type: object
+      required: [status, age_verified, access_token, method]
+      properties:
+        status: { type: string, enum: [verified] }
+        age_verified: { type: boolean }
+        access_token:
+          type: string
+          description: Refreshed JWT so the client is unblocked immediately.
+        method: { type: string }
+        message: { type: string }
+
     Health:
       type: object
       properties:
@@ -1622,6 +2697,89 @@ components:
         download_mode: { type: string, enum: [disabled, public, vip_only] }
         catalog_mode: { type: string, enum: [hybrid, sfw_only, nsfw_only] }
         read_only: { type: boolean }
+        editorial_policy: { type: string, enum: [group_member, open, admin_only] }
+        edit_suggestions_enabled: { type: boolean }
+
+    WorkPermissions:
+      type: object
+      required: [can_view, can_edit, can_delete, can_create_chapter, can_review_suggestions, can_suggest]
+      properties:
+        can_view: { type: boolean }
+        can_edit: { type: boolean }
+        can_delete: { type: boolean }
+        can_create_chapter: { type: boolean }
+        can_review_suggestions: { type: boolean }
+        can_suggest: { type: boolean }
+
+    ChapterPermissions:
+      type: object
+      required: [can_edit, can_delete]
+      properties:
+        can_edit: { type: boolean }
+        can_delete: { type: boolean }
+
+    EditSuggestionPayload:
+      type: object
+      description: Whitelisted work fields; omitted fields are unchanged.
+      properties:
+        original_title: { type: string, maxLength: 255 }
+        localized_title: { type: string, maxLength: 255 }
+        description: { type: string, maxLength: 5000 }
+        language_code:
+          type: string
+          maxLength: 10
+          description: Localization targeted by localized_title/description (default pt-br).
+        status: { type: string, enum: [ongoing, completed, hiatus, cancelled] }
+        format: { type: string, enum: [manga, manhwa, manhua, doujinshi, anime_h, anime_m] }
+        reading_direction: { type: string, enum: [right_to_left, left_to_right, vertical_scroll] }
+        original_language: { type: string, maxLength: 10 }
+        tag_ids:
+          type: array
+          maxItems: 100
+          items: { type: integer, format: int32 }
+        creators:
+          type: array
+          maxItems: 30
+          items:
+            type: object
+            required: [name, role]
+            properties:
+              name: { type: string }
+              role: { type: string }
+        is_nsfw: { type: boolean }
+
+    CreateEditSuggestionRequest:
+      allOf:
+        - $ref: '#/components/schemas/EditSuggestionPayload'
+        - type: object
+          properties:
+            note: { type: string, maxLength: 1000 }
+
+    ReviewEditSuggestionRequest:
+      type: object
+      properties:
+        note: { type: string, maxLength: 1000 }
+
+    EditSuggestion:
+      type: object
+      required: [id, manga_id, manga_slug, manga_title, payload, note, status, review_note, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        manga_id: { type: string, format: uuid }
+        manga_slug: { type: string }
+        manga_title: { type: string }
+        author_id: { type: string, format: uuid }
+        author_username: { type: string }
+        payload:
+          $ref: '#/components/schemas/EditSuggestionPayload'
+        current:
+          $ref: '#/components/schemas/EditSuggestionPayload'
+        note: { type: string }
+        status: { type: string, enum: [pending, approved, rejected] }
+        reviewer_username: { type: string }
+        review_note: { type: string }
+        created_at: { type: string, format: date-time }
+        reviewed_at: { type: string, format: date-time }
 
     RegisterRequest:
       type: object
@@ -1642,7 +2800,7 @@ components:
         preferred_language: { type: string }
         age_verified: { type: boolean }
         is_banned: { type: boolean }
-        vip_until: { type: string, format: date-time, nullable: true }
+        vip_until: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }
 
     AuthResult:
@@ -1662,8 +2820,8 @@ components:
           type: array
           items: { type: string }
         created_at: { type: string, format: date-time }
-        expires_at: { type: string, format: date-time, nullable: true }
-        last_used_at: { type: string, format: date-time, nullable: true }
+        expires_at: { type: [string, "null"], format: date-time }
+        last_used_at: { type: [string, "null"], format: date-time }
 
     APIKeyCreated:
       allOf:
@@ -1713,7 +2871,7 @@ components:
         is_nsfw: { type: boolean }
         cover_url: { type: string }
         is_published: { type: boolean }
-        published_at: { type: string, format: date-time, nullable: true }
+        published_at: { type: [string, "null"], format: date-time }
         updated_at: { type: string, format: date-time }
 
     CreateMangaRequest:
@@ -1741,16 +2899,34 @@ components:
 
     UpdateMangaRequest:
       type: object
+      description: Partial update; omitted fields are unchanged. Requires maintainer rights.
       properties:
         original_title: { type: string }
+        localized_title: { type: string }
+        description: { type: string }
+        language_code: { type: string, description: "Localization targeted by localized_title/description (default pt-br)." }
+        original_language: { type: string }
+        format: { type: string, enum: [manga, manhwa, manhua, doujinshi, anime_h, anime_m] }
+        reading_direction: { type: string, enum: [right_to_left, left_to_right, vertical_scroll] }
         status:
           type: string
           enum: [ongoing, completed, hiatus, cancelled]
         cover_url: { type: string }
+        magazine_id: { type: string, description: "UUID, or empty string to clear." }
+        creators:
+          type: array
+          items:
+            type: object
+            required: [name, role]
+            properties:
+              name: { type: string }
+              role: { type: string }
         tag_ids:
           type: array
           items: { type: integer }
         is_nsfw: { type: boolean }
+        is_vip_exclusive: { type: boolean }
+        is_gallery: { type: boolean }
         is_published: { type: boolean }
 
     CreateChapterRequest:
@@ -1762,7 +2938,7 @@ components:
         volume_number: { type: string }
         title: { type: string }
         language_code: { type: string, default: pt-br }
-        media_type: { type: string, enum: [image_pages, video_hls, video_mp4] }
+        media_type: { type: string, enum: [image_pages, video_stream] }
         is_vip_early_access: { type: boolean }
         is_vip_exclusive: { type: boolean }
         is_published: { type: boolean }
@@ -1782,16 +2958,16 @@ components:
       properties:
         id: { type: string, format: uuid }
         manga_id: { type: string, format: uuid }
-        group_id: { type: string, format: uuid, nullable: true }
-        group_name: { type: string, nullable: true }
+        group_id: { type: [string, "null"], format: uuid }
+        group_name: { type: [string, "null"] }
         chapter_number: { type: number }
-        volume_number: { type: string, nullable: true }
-        title: { type: string, nullable: true }
+        volume_number: { type: [string, "null"] }
+        title: { type: [string, "null"] }
         language_code: { type: string }
-        media_type: { type: string }
+        media_type: { type: string, enum: [image_pages, video_stream] }
         is_vip_early_access: { type: boolean }
         is_vip_exclusive: { type: boolean }
-        published_at: { type: string, format: date-time, nullable: true }
+        published_at: { type: [string, "null"], format: date-time }
 
     ChapterReader:
       type: object
@@ -1806,24 +2982,41 @@ components:
         sources:
           type: array
           items:
-            type: object
-            additionalProperties: true
+            $ref: '#/components/schemas/VideoSource'
 
     Page:
       type: object
       properties:
         page_number: { type: integer }
         media_id: { type: string, format: uuid }
+        url:
+          type: string
+          description: CDN URL for public pages, or the protected media endpoint for gated pages.
+        access:
+          type: string
+          enum: [cdn, protected, unavailable]
         storage_provider: { type: string }
-        storage_key: { type: string }
+        storage_key:
+          type: [string, "null"]
+          description: Omitted for protected pages so the CDN key is not leaked.
         mime_type: { type: string }
         byte_size: { type: integer }
         width: { type: integer }
         height: { type: integer }
-        blurhash: { type: string, nullable: true }
+        blurhash: { type: [string, "null"] }
         variants:
           type: object
-          additionalProperties: true
+          additionalProperties:
+            $ref: '#/components/schemas/PageVariant'
+
+    PageVariant:
+      type: object
+      properties:
+        url: { type: string }
+        mime_type: { type: string }
+        width: { type: integer }
+        height: { type: integer }
+        byte_size: { type: integer }
 
     Media:
       type: object
@@ -1862,11 +3055,26 @@ components:
         manga_id: { type: string, format: uuid }
         manga_slug: { type: string }
         manga_title: { type: string }
-        cover_url: { type: string }
-        chapter_id: { type: string, format: uuid }
-        chapter_number: { type: number }
-        page_number: { type: integer }
+        manga_cover_url: { type: string }
+        is_nsfw: { type: boolean }
+        last_chapter_id: { type: [string, "null"], format: uuid }
+        chapter_number: { type: [number, "null"] }
+        chapter_title: { type: [string, "null"] }
+        last_page: { type: integer }
+        last_video_position_seconds: { type: integer }
         updated_at: { type: string, format: date-time }
+
+    VideoSource:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        chapter_id: { type: string, format: uuid }
+        source_type:
+          type: string
+          enum: [direct_hls, direct_mp4, external_embed]
+        resolution: { type: string, example: "1080p" }
+        stream_url: { type: string, format: uri }
+        server_name: { type: string }
 
     Comment:
       type: object
@@ -1877,7 +3085,7 @@ components:
         avatar_url: { type: string }
         user_role: { type: string }
         chapter_id: { type: string, format: uuid }
-        parent_id: { type: string, format: uuid, nullable: true }
+        parent_id: { type: [string, "null"], format: uuid }
         path: { type: string }
         depth: { type: integer }
         content: { type: string }
