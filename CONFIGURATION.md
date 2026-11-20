@@ -103,7 +103,8 @@ Personas demo (senha `HonbakooDemo!2026`): `reader@honbakoo.test`, `verified@hon
 
 | Variável | Tipo | Padrão | Descrição |
 | :--- | :--- | :--- | :--- |
-| `HONBAKOO__EDITORIAL__CREATION_POLICY` | string | `group_member` | `group_member`, `open` ou `admin_only`. |
+| `HONBAKOO__EDITORIAL__CREATION_POLICY` | string | `group_member` | `admin_only` (curadoria: só staff publica/edita), `group_member` (site de scan: grupos mantêm suas obras) ou `open` (comunidade: qualquer usuário envia capítulos; metadados seguem com mantenedores). Matriz completa na ADR-0018. |
+| `HONBAKOO__EDITORIAL__EDIT_SUGGESTIONS` | bool | `true` | Fila moderada de sugestões de edição para quem não mantém a obra. Exposto em `/api/v1/config` como `edit_suggestions_enabled`. |
 
 ### 3.6 Comunidade (`HONBAKOO__COMMUNITY__*`)
 
